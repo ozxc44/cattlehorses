@@ -124,16 +124,6 @@ docs/             文档 + 产品规划
 - [ ] **多租户** + 团队 RBAC + SSO
 - [ ] **托管平台**（open-core 商业化）
 
-完整产品规划见 [`docs/PRODUCT-PLAN.md`](docs/PRODUCT-PLAN.md)。
-
-## 商业化
-
-**Open-Core 模式**：核心 runtime + 编排引擎开源（本项目），商业托管（多租户/SSO/计费/SLA）作为付费增值。
-
-差异化护城河：统一本地模型 runtime + PM/worker 工程化编排 + 私有部署。
-
-详见 [`docs/RESEARCH-FINAL-PLAN.md`](docs/RESEARCH-FINAL-PLAN.md)（三模型协同调研报告）。
-
 ## 开发
 
 ```bash

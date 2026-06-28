@@ -124,16 +124,6 @@ docs/             Docs + product planning
 - [ ] **Multi-tenancy** + team RBAC + SSO
 - [ ] **Hosted platform** (open-core commercialization)
 
-Full product plan in [`docs/PRODUCT-PLAN.md`](docs/PRODUCT-PLAN.md).
-
-## Commercialization
-
-**Open-Core model**: the core runtime + orchestration engine is open source (this repo); commercial hosting (multi-tenant/SSO/billing/SLA) is the paid tier.
-
-Differentiation moat: unified local-model runtime + PM/worker engineering orchestration + private deployment.
-
-See [`docs/RESEARCH-FINAL-PLAN.md`](docs/RESEARCH-FINAL-PLAN.md) (three-model collaborative research report).
-
 ## Development
 
 ```bash
