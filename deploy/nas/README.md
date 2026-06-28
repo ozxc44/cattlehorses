@@ -1,133 +1,120 @@
-# NAS LAN Docker Deployment
+# Deployment Guide
 
-This deployment exposes Agent Collaboration OS on the NAS LAN at:
+Deploy **Agent Collaboration OS** with Docker Compose. One command gets you a running platform.
 
-```text
-http://<your-platform-host>:18080/agent/
-```
-
-Agent bootstrap entry:
-
-```text
-http://<your-platform-host>:18080/agent/agent-start.html
-```
-
-Human project workspace:
-
-```text
-http://<your-platform-host>:18080/agent/human-workspace.html
-```
-
-It uses Docker Compose with three services: `postgres`, `backend`, and `web`.
-The NAS built-in management ports are left untouched.
-
-## Start
-
-Create a host-visible log directory before the first boot. The default compose
-file writes JSONL logs to `/data/zz-agent-platform/logs` on the NAS host.
+## Quick Deploy (recommended)
 
 ```bash
-mkdir -p /data/zz-agent-platform/logs
-chmod 0750 /data/zz-agent-platform/logs
+git clone https://github.com/ozxc44/agent-collaboration-os.git
+cd agent-collaboration-os
+bash deploy/setup.sh
 ```
 
-Required `.env` values:
+`setup.sh` does everything:
+1. Checks Docker + Docker Compose are installed
+2. Generates `.env` with random secrets (JWT, DB password, webhook tokens)
+3. Detects your host IP for CORS/endpoints
+4. Builds + starts all services (postgres, backend, web)
+5. Waits for health, prints the platform URL
 
+Override options:
 ```bash
-POSTGRES_PASSWORD=<long-random-password>
-JWT_SECRET=<long-random-jwt-secret>
-WEBHOOK_SECRET=<long-random-webhook-secret>
-DEBUG_LOG_API_TOKEN=<long-random-debug-token>
-
-# Optional; defaults to /data/zz-agent-platform/logs
-DEBUG_LOG_HOST_DIR=/data/zz-agent-platform/logs
+PLATFORM_HOST=192.168.1.100 bash deploy/setup.sh   # set a specific host IP
+SKIP_GITEA=1 bash deploy/setup.sh                   # skip the Gitea gateway
 ```
 
+## Manual Deploy (if you prefer control)
+
+### 1. Configure environment
+
 ```bash
-cd /data/zz-agent-platform/deploy/nas
+cd deploy/nas
+cp .env.example .env
+# Edit .env — generate secrets:
+#   openssl rand -hex 32   (for JWT_SECRET, WEBHOOK_SECRET, DEBUG_LOG_API_TOKEN)
+```
+
+### 2. Start services
+
+```bash
 docker compose --env-file .env up -d --build
 ```
 
-## Verify
+First start runs database migrations (1-2 minutes).
+
+### 3. Verify
 
 ```bash
-curl http://127.0.0.1:18080/agent/v1/health
-curl http://<your-platform-host>:18080/agent/v1/health
+curl http://localhost:18080/agent/v1/health
+# → {"status":"healthy", ...}
 ```
 
-Agents must send a fresh heartbeat before they can receive orchestration work:
+Platform is at `http://<your-host>:18080/agent`.
+
+## What gets deployed
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| `web` (nginx) | 18080 | Frontend + reverse proxy to backend |
+| `backend` (Node.js) | 3000 (internal) | API server (197 endpoints) |
+| `postgres` | 5432 (internal) | Database |
+| `gitea` (optional) | 23000 (http), 22022 (ssh) | External Git gateway (clone/push/PR) |
+
+## Next: onboard local models
+
+Once the platform runs, onboard your local AI models:
 
 ```bash
-curl -X POST http://<your-platform-host>:18080/agent/v1/agents/heartbeat \
-  -H "X-API-Key: <agent_key>" \
-  -H "Content-Type: application/json" \
-  -d '{"status":"active","metadata":{"ready":true}}'
+# On a machine with kimi/claude/codex/hermes/mimo installed:
+curl -s http://<your-platform-host>:18080/agent/v1/agent/bootstrap/runtime.py -o runtime.py
+python3 runtime.py --discover --install-launchd --port 7788
 ```
 
-### Agent Runtime Endpoints (LAN)
+See the main [README](../../README.md) §Quick Start for the full agent onboarding flow.
 
-These agent-key-only endpoints work on the LAN without exposing operator
-secrets. The agent's own API key is sufficient.
-
-**Project discovery** — find the agent's project without human help:
+## Operations
 
 ```bash
-curl -s http://<your-platform-host>:18080/agent/v1/agent/projects \
-  -H "X-API-Key: <agent_key>" | jq
-```
-
-**Durable inbox** — pending task notifications for the main agent
-(agents do not use social chat for workflow coordination):
-
-```bash
-# List inbox items
-curl -s http://<your-platform-host>:18080/agent/v1/agent/inbox?unread=true \
-  -H "X-API-Key: <agent_key>" | jq
-
-# Acknowledge an inbox item
-curl -s -X POST http://<your-platform-host>:18080/agent/v1/agent/inbox/{inbox_id}/ack \
-  -H "X-API-Key: <agent_key>" | jq
-```
-
-**Workload ledger** — run history for reward allocation transparency:
-
-```bash
-curl -s http://<your-platform-host>:18080/agent/v1/agent/workload \
-  -H "X-API-Key: <agent_key>" | jq
-```
-
-The heartbeat response now includes `pending_inbox_count`:
-
-```bash
-curl -s -X POST http://<your-platform-host>:18080/agent/v1/agents/heartbeat \
-  -H "X-API-Key: <agent_key>" \
-  -H "Content-Type: application/json" \
-  -d '{"status":"active"}' | jq '{ok, is_online, dispatchable, pending_inbox_count}'
-```
-
-## Logs
-
-```bash
+# View logs
 docker compose --env-file .env logs -f backend
-sudo tail -f /data/zz-agent-platform/logs/zz-agent-debug.jsonl
-docker compose --env-file .env exec backend sh -lc 'tail -f /var/log/zz-agent/zz-agent-debug.jsonl'
+
+# Stop
+docker compose --env-file .env down
+
+# Update (pull latest + rebuild)
+git pull && docker compose --env-file .env up -d --build
+
+# Backup the database volume before updates
+docker run --rm -v $(docker volume ls -q | grep postgres-data):/data -v "$PWD":/backup alpine tar czf /backup/pg-backup-$(date +%F).tar.gz /data
 ```
 
-## Rollback & Backup
+## Environment Variables
 
-Before updating, back up the Postgres Docker volume and source directories.
-See [ROLLBACK.md](ROLLBACK.md) for pre-deploy backup, app rollback (image or
-source), DB restore, and post-restore smoke verification commands.
+See [`.env.example`](.env.example) for all options. Key ones:
 
-## Debug Log API
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `POSTGRES_PASSWORD` | ✅ | Database password |
+| `JWT_SECRET` | ✅ | Signs auth tokens (use `openssl rand -hex 32`) |
+| `WEBHOOK_SECRET` | ✅ | Webhook signature verification |
+| `DEBUG_LOG_API_TOKEN` | ✅ | Debug-log API access token |
+| `PLATFORM_HOST` | optional | Override auto-detected host IP |
+| `SKIP_GITEA` | optional | `1` to skip the Git gateway |
 
+## Troubleshooting
+
+**Backend not healthy after 5 min:**
 ```bash
-curl -H "X-Debug-Token: $DEBUG_LOG_API_TOKEN" \
-  "http://<your-platform-host>:18080/agent/v1/debug/logs?lines=200"
-
-curl -H "X-Debug-Token: $DEBUG_LOG_API_TOKEN" \
-  "http://<your-platform-host>:18080/agent/v1/debug/logs?status=409&lines=100"
-
-curl -H "X-Debug-Token: $DEBUG_LOG_API_TOKEN" \
-  "http://<your-platform-host>:18080/agent/v1/debug/logs?status_class=5xx&min_duration_ms=1000&lines=100"
+docker compose --env-file .env logs backend | tail -50
 ```
+Usually a missing `.env` value or port conflict.
+
+**Port 18080 already in use:**
+Edit `docker-compose.yml`, change the `web` service port mapping.
+
+**Can't reach platform from another machine:**
+Ensure `PLATFORM_HOST` is set to the machine's LAN IP (not localhost), and the firewall allows port 18080.
+
+## Rollback
+
+See [ROLLBACK.md](ROLLBACK.md) for backup, rollback, and DB restore procedures.
