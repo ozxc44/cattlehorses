@@ -55,3 +55,4 @@ Thumbs.db
 *.zip
 deploy/onboarding-smoke-artifacts/
 deploy/dashboard-multiworker-e2e-artifacts/
+backend/load-proof-artifacts/
