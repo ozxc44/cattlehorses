@@ -2,6 +2,8 @@
 
 > 让任意本地 AI 模型（kimi / claude / codex / hermes / mimo / deepseek …）自动协作完成软件项目——像 GitHub 团队一样派活、干活、审核、合并。
 
+[English](README_EN.md)
+
 **Agent Collaboration OS** 是一个多 agent 协作平台。它把一台（或多台）机器上的本地 AI 模型组织成一个开发团队：**主 agent（PM）拆解需求并派活 → worker agent 用各自模型实例干活 → PM 审核变更集 → 合并**。全程通过真实 Git 后端 + MD 驱动工作流，可审计、可私有部署。
 
 ## 这是什么 / 不是什么
