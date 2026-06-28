@@ -25,21 +25,21 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      PUBLIC_BASE_URL: http://<your-platform-host>:18080/agent
-      CORS_ORIGINS: http://<your-platform-host>:18080,http://127.0.0.1:18080,http://localhost:18080
+      # Set PLATFORM_HOST in .env (or let setup.sh auto-detect). Used for CORS
+      # and generating public URLs. localhost works for single-machine use.
+      PUBLIC_BASE_URL: http://${PLATFORM_HOST:-localhost}:18080/agent
+      CORS_ORIGINS: http://${PLATFORM_HOST:-localhost}:18080,http://127.0.0.1:18080,http://localhost:18080
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USERNAME: zz_agent
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_DATABASE: zz_agent
       DB_SYNCHRONIZE: "false"
-      # Durable-inbox lease / redelivery. Enabled by default in production; the
-      # TTL can be overridden via .env (e.g. INBOX_LEASE_TTL_MS=3000 for tests).
       INBOX_LEASE_ENABLED: "true"
       INBOX_LEASE_TTL_MS: ${INBOX_LEASE_TTL_MS:-300000}
       JWT_SECRET: ${JWT_SECRET}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET}
-      LOG_LEVEL: debug
+      LOG_LEVEL: info
       DEBUG_LOG_ENABLED: "true"
       LOG_DIR: /var/log/zz-agent
       PROJECT_GIT_DIR: /data/project-git
@@ -49,8 +49,10 @@ services:
       DEBUG_LOG_API_ENABLED: "true"
       DEBUG_LOG_API_TOKEN: ${DEBUG_LOG_API_TOKEN}
     volumes:
-      - ${DEBUG_LOG_HOST_DIR:-/data/zz-agent-platform/logs}:/var/log/zz-agent
-      - ${PROJECT_GIT_HOST_DIR:-/data/zz-agent-platform/project-git}:/data/project-git
+      # Logs + project-git repos. Defaults to ./data/ inside the repo (portable).
+      # Override via .env: DEBUG_LOG_HOST_DIR=/your/path, PROJECT_GIT_HOST_DIR=/your/path
+      - ${DEBUG_LOG_HOST_DIR:-./data/logs}:/var/log/zz-agent
+      - ${PROJECT_GIT_HOST_DIR:-./data/project-git}:/data/project-git
 
   web:
     image: nginx:1.27-alpine
@@ -63,17 +65,18 @@ services:
       - ../../dashboard:/usr/share/nginx/html/agent:ro
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
 
-  # Forgejo/Gitea — external Git gateway (clone/push/PR/LFS/archive).
-  # API-compatible with the backend's GiteaSyncService. Data on the big disk.
+  # ── Gitea/Forgejo — optional external Git gateway (clone/push/PR/LFS) ──
+  # Start with core only (default) or include Gitea: set INCLUDE_GITEA=1
+  # To use: uncomment this block, or run `docker compose --profile gitea up`
   gitea:
     image: gitea/gitea:1.22
-    container_name: nas-gitea
+    profiles: ["gitea"]
     restart: unless-stopped
     environment:
       USER_UID: "1000"
       USER_GID: "1000"
-      GITEA__server__DOMAIN: "<your-platform-host>"
-      GITEA__server__ROOT_URL: "http://<your-platform-host>:23000/"
+      GITEA__server__DOMAIN: "${PLATFORM_HOST:-localhost}"
+      GITEA__server__ROOT_URL: "http://${PLATFORM_HOST:-localhost}:23000/"
       GITEA__server__HTTP_PORT: "3000"
       GITEA__server__SSH_PORT: "22"
       GITEA__security__INSTALL_LOCK: "true"
@@ -81,10 +84,7 @@ services:
       - "23000:3000"
       - "22022:22"
     volumes:
-      - /data_n004/forgejo/data:/data
-      - /data_n004/forgejo/config:/data/gitea/conf
-      - /etc/timezone:/etc/timezone:ro
-      - /etc/localtime:/etc/localtime:ro
+      - ${GITEA_DATA_HOST_DIR:-./data/gitea}:/data
 
 volumes:
   postgres-data:
