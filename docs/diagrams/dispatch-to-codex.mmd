@@ -1,0 +1,61 @@
+flowchart TD
+  %% Dispatch from a PM agent on NAS to a Codex worker on the local Mac.
+
+  subgraph HarnessPM["PM Harness - platform side"]
+    PM["PM / 主 agent<br/>kimi / claude / hermes"]
+    Review["PM 审核验收<br/>review result + accept / fix"]
+  end
+
+  subgraph NAS["NAS: Agent Collaboration OS"]
+    Platform["Platform API<br/>Postgres + isomorphic-git"]
+    Router["Dispatch router<br/>route by X-ZZ-Agent-Id"]
+    Repo["Project workspace<br/>tasks / branches / files"]
+  end
+
+  subgraph LAN["LAN boundary: NAS to Mac"]
+    Request["Signed invoke request<br/>X-ZZ-Agent-Id = codex"]
+    Result["Worker result callback<br/>status / diff / notes"]
+  end
+
+  subgraph Mac["Local Mac: Unified Runtime"]
+    Runtime["Unified Runtime<br/>receive invoke"]
+    AgentMap["agent_id router<br/>exact target selection"]
+    CodexBackend["Codex backend adapter"]
+  end
+
+  subgraph CodexHarness["Codex Harness - worker side"]
+    Instance["instance: codex<br/>persistent tmux session"]
+    Tools["Codex execution<br/>read files / write code / use tools"]
+    Submit["Submit result<br/>summary + artifacts"]
+  end
+
+  CrossHarness["Cross harness<br/>PM model != Codex worker model"]
+  CrossComputer["Cross computer<br/>NAS platform <-> Mac worker over LAN"]
+  ExactRoute["Precise routing<br/>agent_id prevents wrong terminal/session"]
+
+  PM -->|"assign work"| Platform
+  Platform --> Repo
+  Platform --> Router
+  Router -->|"HTTP invoke with X-ZZ-Agent-Id"| Request
+  Request -->|"NAS to Mac over LAN"| Runtime
+  Runtime --> AgentMap
+  AgentMap -->|"agent_id = codex"| CodexBackend
+  CodexBackend --> Instance
+  Instance --> Tools
+  Tools --> Submit
+  Submit --> Result
+  Result -->|"Mac to NAS callback"| Platform
+  Platform --> Review
+  Review -->|"accept or request fix"| PM
+
+  PM -.-> CrossHarness -.-> Instance
+  Request -.-> CrossComputer -.-> Runtime
+  Router -.-> ExactRoute -.-> AgentMap
+
+  classDef focus fill:#eef7ff,stroke:#2678bd,stroke-width:1px,color:#111;
+  classDef route fill:#fff7e6,stroke:#c77d00,stroke-width:1px,color:#111;
+  classDef note fill:#f6f6f6,stroke:#666,stroke-width:1px,color:#111;
+
+  class PM,Review,Instance,Tools focus;
+  class Router,AgentMap,Request,Result route;
+  class CrossHarness,CrossComputer,ExactRoute note;
