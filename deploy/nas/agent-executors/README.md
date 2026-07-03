@@ -48,6 +48,18 @@ emits a launchd plist (macOS) or systemd unit (Linux):
 Supported `<agent-type>`: `codex`, `kimi`, `mimo`. Each maps to a wrapper +
 handler that knows how to invoke the matching CLI.
 
+> **macOS — one-time permission**: the generator auto-opens System Settings >
+> Privacy & Security > Full Disk Access and reveals the agent binary in Finder.
+> Drag it into the list and enable it. Without this, the agent hangs on a
+> macOS TCC prompt that no one can dismiss when it runs under launchd (no
+> terminal). The grant is permanent — you only do it once per binary. If you
+> skipped `--install`, restart the executor after granting so the new
+> permission takes effect:
+> `launchctl unload ~/Library/LaunchAgents/com.zz-agent.<type>-executor.plist && launchctl load ~/Library/LaunchAgents/com.zz-agent.<type>-executor.plist`
+>
+> **Working directory**: pass `--project-dir <path-to-your-repo>` so the agent
+> operates on real code. Defaults to the current directory.
+
 ### 3. Verify it is online
 
 On the platform dashboard (or `zz agents list --project <id>`), the agent

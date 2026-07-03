@@ -30,6 +30,6 @@
 	<key>StandardOutPath</key>
 	<string>{{ZZ_AGENT_HOME}}/{{LABEL}}.launchd.log</string>
 	<key>WorkingDirectory</key>
-	<string>{{HOME}}</string>
+	<string>{{PROJECT_DIR}}</string>
 </dict>
 </plist>

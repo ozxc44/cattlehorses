@@ -28,12 +28,13 @@ usage() {
 [ $# -ge 1 ] || usage
 AGENT_TYPE="$1"; shift
 
-BASE_URL=""; KEY=""; LABEL=""; INSTALL=0
+BASE_URL=""; KEY=""; LABEL=""; INSTALL=0; PROJECT_DIR=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --base-url) BASE_URL="$2"; shift 2;;
     --key) KEY="$2"; shift 2;;
     --label) LABEL="$2"; shift 2;;
+    --project-dir) PROJECT_DIR="$2"; shift 2;;
     --install) INSTALL=1; shift;;
     *) echo "Unknown option: $1"; usage;;
   esac
@@ -51,6 +52,9 @@ case "$AGENT_TYPE" in
 esac
 
 LABEL="${LABEL:-com.zz-agent.${AGENT_TYPE}-executor}"
+# Working directory for the executor: the project repo root, so the agent
+# operates on real code. Defaults to the current directory.
+PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
 mkdir -p "$ZZ_AGENT_HOME"
 
 fill() {
@@ -62,6 +66,7 @@ fill() {
     -e "s|{{ZZ_AGENT_HOME}}|$ZZ_AGENT_HOME|g" \
     -e "s|{{LABEL}}|$LABEL|g" \
     -e "s|{{WRAPPER}}|$WRAPPER|g" \
+    -e "s|{{PROJECT_DIR}}|$PROJECT_DIR|g" \
     -e "s|{{HOME}}|$HOME|g" \
     "$1"
 }
@@ -76,6 +81,34 @@ case "$(uname -s)" in
       launchctl unload "$OUT" 2>/dev/null || true
       launchctl load "$OUT"
       echo "Loaded into launchd (KeepAlive enabled)."
+    fi
+    # macOS: the agent binary needs Full Disk Access to read files under
+    # ~/Documents etc. Without it, the agent hangs on a TCC prompt that no
+    # one can dismiss when running under launchd. Guide a one-time grant.
+    case "$AGENT_TYPE" in
+      kimi) AGENT_BIN="${KIMI_BIN:-$HOME/.kimi-code/bin/kimi}";;
+      mimo) AGENT_BIN="${MIMO_BIN:-$HOME/.mimocode/bin/mimo}";;
+      codex) AGENT_BIN="${CODEX_BIN:-/Applications/Codex.app/Contents/Resources/codex}";;
+      *) AGENT_BIN="";;
+    esac
+    if [ -n "$AGENT_BIN" ] && [ -x "$AGENT_BIN" ]; then
+      echo ""
+      echo "── macOS permission (one-time) ──"
+      echo "The $AGENT_TYPE binary needs Full Disk Access to read project files."
+      echo "Opening System Settings > Privacy & Security > Full Disk Access..."
+      open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+      sleep 1
+      # Reveal the binary in Finder so the user can drag it into the list.
+      open -R "$AGENT_BIN" 2>/dev/null
+      echo ""
+      echo "Steps:"
+      echo "  1. Drag '$AGENT_BIN' (shown in Finder) into the Full Disk Access list."
+      echo "  2. Ensure its toggle is ON."
+      echo "  3. If you changed the plist (--install), restart the executor so the"
+      echo "     grant takes effect:"
+      echo "       launchctl unload $OUT && launchctl load $OUT"
+      echo ""
+      echo "After this one-time grant, $AGENT_TYPE runs without prompts."
     fi
     ;;
   Linux)
