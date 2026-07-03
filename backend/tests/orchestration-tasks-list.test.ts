@@ -104,7 +104,7 @@ async function main(): Promise<void> {
     const t3Claim = await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/orchestrations/${beta.data.id}/tasks/${t3.data.id}/claim`, workerAgent.data.api_key);
     assert.equal(t3Claim.status, 200);
     const t3Complete = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/orchestrations/${beta.data.id}/tasks/${t3.data.id}/complete`, workerAgent.data.api_key, {
-      result_md: '# Result\n\nDone.',
+      result_md: '# Result\n\nDone with task list verification.',
       evidence: { ok: true },
     });
     assert.equal(t3Complete.status, 200);

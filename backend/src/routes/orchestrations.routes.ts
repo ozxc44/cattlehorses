@@ -26,6 +26,7 @@ import { MessageVisibility } from '../entities/message.entity';
 import { getAgentPresence } from '../services/agent-presence.service';
 import { SessionDispatchService } from '../services/session-dispatch.service';
 import { checkDependenciesMet } from '../services/task-graph.service';
+import { verifyTaskCompletion } from '../services/task-verification.service';
 import {
   writeTaskMd,
   writeResultMd,
@@ -751,6 +752,15 @@ router.post(
       const resultMd = typeof req.body.result_md === 'string' ? req.body.result_md.trim() : '';
       if (!resultMd) {
         res.status(422).json({ detail: 'result_md is required' });
+        return;
+      }
+      const verification = await verifyTaskCompletion(task, resultMd);
+      if (!verification.passed) {
+        res.status(422).json({
+          detail: 'Task verification failed',
+          code: 'VERIFICATION_FAILED',
+          failures: verification.failures,
+        });
         return;
       }
       const evidence = normalizeEvidence(req.body.evidence);

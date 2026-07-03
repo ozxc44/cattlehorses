@@ -377,7 +377,7 @@ async function main(): Promise<void> {
       `/v1/projects/${projectId}/orchestrations/${orch2.data.id}/tasks/${task2.data.id}/complete`,
       workerAgent.data.api_key,
       {
-        result_md: '# Blocked',
+        result_md: '# Blocked\n\nBlocked on dependency.',
         evidence: { reason: 'dependency missing' },
         status: 'blocked',
       },

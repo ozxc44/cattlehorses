@@ -173,7 +173,7 @@ async function main(): Promise<void> {
       `/v1/projects/${projectId}/orchestrations/${orchestration.data.id}/tasks/${task.data.id}/complete`,
       workerAgent.data.api_key,
       {
-        result_md: '# Result\n\nInitial implementation notes.',
+        result_md: '# Result\n\nInitial implementation notes. Result file exists and Evidence file exists.',
         evidence: { checks: ['smoke'], result: 'needs review' },
       },
     );
@@ -203,7 +203,7 @@ async function main(): Promise<void> {
       `/v1/projects/${projectId}/orchestrations/${orchestration.data.id}/tasks/${task.data.id}/complete`,
       workerAgent.data.api_key,
       {
-        result_md: '# Result\n\nFinal implementation notes with acceptance coverage.',
+        result_md: '# Result\n\nFinal implementation notes with acceptance coverage. Result file exists and Evidence file exists.',
         evidence: { checks: ['smoke', 'pm-loop'], result: 'pass' },
       },
     );

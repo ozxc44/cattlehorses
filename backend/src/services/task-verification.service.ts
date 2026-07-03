@@ -1,56 +1,44 @@
-import { ProjectOrchestrationTask } from '../entities/project-orchestration-task.entity';
+import type { ProjectOrchestrationTask } from '../entities';
 
-export type TaskVerificationResult = {
+export type TaskCompletionVerificationResult = {
   passed: boolean;
   failures: string[];
 };
 
-/**
- * Lightweight, deterministic quality gate for task completion.
- *
- * Checks:
- *  - resultMd trimmed length >= 20 chars.
- *  - if task.acceptanceCriteria is a non-empty array, each non-empty criterion
- *    string (or its first 4 words) must appear in resultMd (case-insensitive).
- */
 export async function verifyTaskCompletion(
   task: ProjectOrchestrationTask,
   resultMd: string,
-): Promise<TaskVerificationResult> {
+): Promise<TaskCompletionVerificationResult> {
   const failures: string[] = [];
-
   const trimmedResult = resultMd.trim();
+
   if (trimmedResult.length < 20) {
-    failures.push('result_md must be at least 20 characters');
+    failures.push('Result markdown must be at least 20 characters');
   }
 
-  const criteria = task.acceptanceCriteria;
-  if (Array.isArray(criteria) && criteria.length > 0) {
-    const lowerResult = trimmedResult.toLowerCase();
-    for (const criterion of criteria) {
-      if (criterion === null || criterion === undefined) {
-        continue;
-      }
-      const trimmedCriterion = String(criterion).trim();
-      if (trimmedCriterion.length === 0) {
-        continue;
-      }
-      const lowerCriterion = trimmedCriterion.toLowerCase();
-      if (lowerResult.includes(lowerCriterion)) {
-        continue;
-      }
+  if (Array.isArray(task.acceptanceCriteria) && task.acceptanceCriteria.length > 0) {
+    const normalizedResult = normalizeText(trimmedResult);
 
-      const words = lowerCriterion.split(/\s+/).filter((w) => w.length > 0);
-      if (words.length >= 4) {
-        const firstFour = words.slice(0, 4).join(' ');
-        if (lowerResult.includes(firstFour)) {
-          continue;
-        }
-      }
+    for (const rawCriterion of task.acceptanceCriteria) {
+      if (typeof rawCriterion !== 'string') continue;
+      const criterion = rawCriterion.trim();
+      if (!criterion) continue;
 
-      failures.push(`Acceptance criterion not addressed: ${trimmedCriterion}`);
+      const normalizedCriterion = normalizeText(criterion);
+      const firstFourWords = normalizedCriterion.split(/\s+/).slice(0, 4).join(' ');
+      const criterionAddressed =
+        normalizedResult.includes(normalizedCriterion) ||
+        (!!firstFourWords && normalizedResult.includes(firstFourWords));
+
+      if (!criterionAddressed) {
+        failures.push(`Acceptance criterion not addressed: ${criterion}`);
+      }
     }
   }
 
   return { passed: failures.length === 0, failures };
+}
+
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, ' ').trim();
 }
