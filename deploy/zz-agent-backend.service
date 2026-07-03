@@ -1,0 +1,19 @@
+[Unit]
+Description=ZZ Agent Backend API
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zzagent
+Group=zzagent
+WorkingDirectory=/opt/zhuzeyang-agent/backend
+EnvironmentFile=/etc/zhuzeyang-agent/backend.env
+ExecStart=/usr/bin/node dist/src/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

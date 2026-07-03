@@ -2,6 +2,9 @@ export const RUNTIME_PROTOCOL_VERSION = 'runtime.v1' as const;
 export const RUNTIME_USER_AGENT = 'zhuzeyang-agent-runtime/1.0' as const;
 export const RUNTIME_MAX_ATTEMPTS = 1 as const;
 
+/** Default lease window for async runs: worker must heartbeat before expiry. */
+export const RUNTIME_ASYNC_LEASE_SECONDS = 120 as const;
+
 export type RuntimeProtocolVersion = typeof RUNTIME_PROTOCOL_VERSION;
 
 export type AgentInvokeTrigger =
@@ -72,11 +75,19 @@ export interface ProjectMemorySnapshot {
   updated_at: string;
 }
 
+export type AgentInvokeMode = 'sync' | 'async';
+
 export interface RuntimeInvokeConfig {
   timeout_ms: number;
-  max_attempts: typeof RUNTIME_MAX_ATTEMPTS;
-  supports_async: false;
-  supports_streaming: false;
+  max_attempts: number;
+  supports_async: boolean;
+  supports_streaming: boolean;
+  /** Platform callback URL for async events/complete. Only sent when supports_async=true. */
+  callback_url?: string;
+  /** Bearer token the worker must use when calling callback_url. */
+  callback_token?: string;
+  /** How long (seconds) the platform will wait for a worker heartbeat before redelivering/recovering. */
+  lease_seconds?: number;
   [key: string]: unknown;
 }
 
@@ -144,6 +155,29 @@ export interface AgentInvokeResponse {
   };
 }
 
+/** Worker ack when accepting an async run (HTTP 202). */
+export interface AgentInvokeAsyncAckResponse {
+  status: 'accepted';
+  run_id?: string;
+  delivery_id?: string;
+  message?: string;
+  lease_seconds?: number;
+}
+
+/** Result shape returned by invokeAgent when mode='async' and the worker acks. */
+export interface AgentInvokeAsyncResult {
+  ok: boolean;
+  status: 'accepted';
+  async: true;
+  runId: string;
+  deliveryId: string;
+  attempt: number;
+  httpStatus: number;
+  leaseSeconds?: number;
+  messages: SanitizedAgentResponseMessage[];
+  metrics: AgentReportedMetric[];
+}
+
 export type RuntimeFailureType =
   | 'timeout'
   | 'transport_error'
@@ -153,7 +187,9 @@ export type RuntimeFailureType =
   | 'agent_rejected'
   | 'agent_unavailable'
   | 'invalid_response'
-  | 'unsupported_async_response';
+  | 'unsupported_async_response'
+  | 'async_callback_error'
+  | 'lease_expired';
 
 export interface SanitizedAgentResponseMessage {
   message_id: string;
@@ -187,6 +223,38 @@ export interface RuntimeEventAppend {
 
 export interface RuntimeEventRepository {
   appendEvent(event: RuntimeEventAppend): Promise<unknown>;
+}
+
+/** Worker heartbeat/event payload: extend the run lease and/or append intermediate events. */
+export interface AgentRunEventPayload {
+  /** Optional short status update from the worker. */
+  status?: 'running' | 'processing' | string;
+  /** Optional log/event lines the platform should persist. */
+  events?: Array<{
+    type: string;
+    payload?: Record<string, unknown>;
+    idempotency_key?: string;
+  }>;
+  /** Optional health metrics emitted mid-run. */
+  metrics?: AgentReportedMetric[];
+  /** New lease request in seconds; platform caps to RUNTIME_ASYNC_LEASE_SECONDS. */
+  lease_seconds?: number;
+}
+
+/** Worker completion payload: finish an async run. */
+export interface AgentRunCompletePayload {
+  status: 'completed' | 'failed' | 'rejected' | 'no_reply';
+  messages?: AgentResponseMessage[];
+  metrics?: AgentReportedMetric[];
+  error?: {
+    code: string;
+    message: string;
+    retryable?: boolean;
+  };
+  debug?: {
+    summary?: string;
+    logs?: string[];
+  };
 }
 
 export interface RuntimeHttpResponse {

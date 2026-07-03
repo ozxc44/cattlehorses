@@ -1,0 +1,11 @@
+backend/node_modules
+backend/dist
+backend/.cache
+backend/*.sqlite
+backend/*.sqlite3
+.codex
+.gk
+.github
+tasks
+deploy/dashboard-e2e-artifacts
+**/__pycache__

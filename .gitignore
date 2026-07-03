@@ -17,18 +17,22 @@ multiworker-evidence-*.json
 *.evidence.json
 
 # ─── Development logs (private, may contain IPs/credentials) ───
-.codex/pm-workers/tasks/
-.codex/pm-workers/inbox/
-.codex/pm-workers/*.stderr.log
-.codex/pm-workers/*.log
 *.stderr.log
 *.err.log
 
-# ─── Local agent runtime state ───
+# ─── Local agent runtime state (NEVER commit — contains runtime data, PM workers, loops) ───
+.codex/
+.autonomous-loop/
 .zz-agent/
 .zcode/cli/db/
 .zcode/cli/log/
 .zcode/cli/debug/
+
+# ─── Internal planning / PM-Codex collaboration docs (not for public repo) ───
+tasks/
+result.md
+plan-v2.md
+plan-v2-gk-execution-brief.md
 
 # ─── Environment / secrets ───
 .env
@@ -50,9 +54,10 @@ Thumbs.db
 *.swp
 *.swo
 
-# ─── Archives ───
+# ─── Archives / backups ───
 *.tar.gz
 *.zip
+*.bak
 deploy/onboarding-smoke-artifacts/
 deploy/dashboard-multiworker-e2e-artifacts/
 backend/load-proof-artifacts/
