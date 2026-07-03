@@ -1,0 +1,2088 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZZ Agent - Enterprise Collaboration Dashboard</title>
+<style>
+/* ============================================================
+   CSS Variables & Reset
+   ============================================================ */
+:root {
+  --color-primary: #2563eb;
+  --color-primary-strong: #1d4ed8;
+  --color-primary-light: #eff6ff;
+  --color-primary-border: #bfdbfe;
+  --color-bg: #f8fafc;
+  --color-panel: #ffffff;
+  --color-panel-alt: #fbfcfe;
+  --color-text: #182230;
+  --color-muted: #61708a;
+  --color-soft: #7c8aa1;
+  --color-border: #d7dee8;
+  --color-border-strong: #b6c1cf;
+  --color-success: #047857;
+  --color-success-bg: #ecfdf5;
+  --color-success-border: rgba(4,120,87,0.22);
+  --color-warning: #b45309;
+  --color-warning-bg: #fffbeb;
+  --color-warning-border: rgba(180,83,9,0.24);
+  --color-error: #b91c1c;
+  --color-error-bg: #fef2f2;
+  --color-error-border: rgba(185,28,28,0.22);
+  --color-shadow: rgba(24,34,48,0.08);
+  --color-overlay: rgba(24,34,48,0.45);
+  --sidebar-width: 260px;
+  --header-height: 52px;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --transition: 0.15s ease;
+}
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { height: 100%; }
+
+body {
+  min-width: 1024px;
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: 14px/1.5 var(--font);
+  overflow: hidden;
+}
+
+button, input, textarea, select { font: inherit; }
+
+button {
+  border: 0;
+  cursor: pointer;
+  background: none;
+  color: inherit;
+}
+
+button:disabled { cursor: not-allowed; opacity: 0.5; }
+
+input, textarea, select {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  outline: none;
+  width: 100%;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+}
+
+textarea { resize: vertical; min-height: 60px; }
+
+a { color: var(--color-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ============================================================
+   Layout: Header + Sidebar + Main
+   ============================================================ */
+.app {
+  display: grid;
+  grid-template-rows: var(--header-height) 1fr;
+  height: 100vh;
+}
+
+/* ---- Header ---- */
+.header {
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: var(--color-panel);
+  border-bottom: 1px solid var(--color-border);
+  gap: 12px;
+  z-index: 10;
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+  color: var(--color-text);
+}
+
+.header-logo svg { flex-shrink: 0; }
+
+.header-space-name {
+  font-size: 13px;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.header-spacer { flex: 1; }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.header-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  transition: background var(--transition), color var(--transition);
+}
+
+.header-btn:hover { background: var(--color-bg); color: var(--color-text); }
+
+.header-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* ---- Body: sidebar + main ---- */
+.body {
+  display: flex;
+  overflow: hidden;
+}
+
+/* ---- Sidebar ---- */
+.sidebar {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  background: var(--color-panel);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-section {
+  padding: 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sidebar-section:last-child { border-bottom: 0; }
+
+.sidebar-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.sidebar-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-muted);
+}
+
+.sidebar-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--color-muted);
+  transition: background var(--transition), color var(--transition);
+}
+
+.sidebar-add-btn:hover { background: var(--color-bg); color: var(--color-primary); }
+
+.sidebar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition);
+  min-width: 0;
+}
+
+.sidebar-item:hover { background: var(--color-bg); }
+
+.sidebar-item.active {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+.sidebar-item-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 13px;
+}
+
+.sidebar-item-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.badge-private {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning-border);
+}
+
+.badge-public {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
+}
+
+.badge-online {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.badge-offline {
+  background: #f1f5f9;
+  color: var(--color-muted);
+}
+
+.badge-status {
+  background: #f1f5f9;
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+}
+
+.sidebar-empty {
+  font-size: 12px;
+  color: var(--color-soft);
+  padding: 8px 0;
+  text-align: center;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+
+.sidebar-footer .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dot-green { background: var(--color-success); }
+.dot-red { background: var(--color-error); }
+.dot-yellow { background: var(--color-warning); }
+
+/* ---- Inline create form ---- */
+.inline-form {
+  padding: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.inline-form input, .inline-form select {
+  font-size: 12px;
+  padding: 5px 7px;
+}
+
+.inline-form-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+/* ---- Main content ---- */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+/* Agent Panel */
+.agent-panel {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+
+.agent-panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-muted);
+  margin-bottom: 8px;
+}
+
+.agent-cards {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.agent-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-panel);
+  white-space: nowrap;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.agent-card .dot { width: 6px; height: 6px; }
+
+.agent-panel-empty {
+  font-size: 12px;
+  color: var(--color-soft);
+}
+
+/* Session Timeline */
+.timeline-container {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.timeline-header {
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-panel-alt);
+}
+
+.timeline-header-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.timeline-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.timeline-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: var(--color-soft);
+  font-size: 14px;
+  padding: 40px;
+  text-align: center;
+}
+
+/* Messages */
+.msg {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.msg-meta {
+  font-size: 11px;
+  color: var(--color-soft);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.msg-content {
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.msg-user {
+  align-self: flex-end;
+  background: var(--color-primary-light);
+  border-color: var(--color-primary-border);
+  border-left: 3px solid var(--color-primary);
+}
+
+.msg-agent {
+  align-self: flex-start;
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  border-left: 3px solid var(--color-success);
+}
+
+.msg-system {
+  align-self: center;
+  background: #f8fafc;
+  border-color: var(--color-border);
+  color: var(--color-muted);
+  font-size: 12px;
+  max-width: 70%;
+  text-align: center;
+}
+
+/* Events */
+.event-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--color-muted);
+  border-left: 2px solid var(--color-border);
+  margin-left: 4px;
+}
+
+.event-type {
+  font-weight: 700;
+  color: var(--color-text);
+  font-size: 11px;
+  text-transform: uppercase;
+  min-width: 80px;
+}
+
+.event-time {
+  font-size: 11px;
+  color: var(--color-soft);
+  white-space: nowrap;
+}
+
+/* Change Review Card */
+.review-card {
+  max-width: 85%;
+  align-self: flex-start;
+  border: 2px solid var(--color-warning);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  overflow: hidden;
+}
+
+.review-card-header {
+  padding: 10px 14px;
+  background: var(--color-warning-bg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--color-warning-border);
+}
+
+.review-card-header svg { flex-shrink: 0; }
+
+.review-card-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--color-warning);
+}
+
+.review-card-body {
+  padding: 12px 14px;
+}
+
+.review-description {
+  font-size: 13px;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+
+.diff-block {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin-bottom: 10px;
+}
+
+.diff-add { color: var(--color-success); background: #f0fdf4; }
+.diff-del { color: var(--color-error); background: #fef2f2; }
+
+.review-card-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+/* ---- Input Area ---- */
+.input-area {
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-panel);
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.input-textarea {
+  flex: 1;
+  min-height: 40px;
+  max-height: 120px;
+  resize: none;
+  font-size: 13px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
+}
+
+.input-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.send-mode-toggle {
+  display: flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.send-mode-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-muted);
+  background: var(--color-panel);
+  transition: all var(--transition);
+}
+
+.send-mode-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.send-mode-btn:not(.active):hover {
+  background: var(--color-bg);
+}
+
+/* ---- Buttons ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background var(--transition), color var(--transition);
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn-primary:hover { background: var(--color-primary-strong); }
+
+.btn-success {
+  background: var(--color-success);
+  color: #fff;
+}
+
+.btn-success:hover { background: #059669; }
+
+.btn-danger {
+  background: var(--color-error);
+  color: #fff;
+}
+
+.btn-danger:hover { background: #991b1b; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-muted);
+  border: 1px solid var(--color-border);
+}
+
+.btn-ghost:hover { background: var(--color-bg); }
+
+.btn-sm {
+  min-height: 26px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.btn-send {
+  min-height: 40px;
+  padding: 0 20px;
+  border-radius: var(--radius);
+}
+
+/* ---- Modal ---- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-overlay);
+  backdrop-filter: blur(4px);
+}
+
+.modal-overlay.hidden { display: none; }
+
+.modal-box {
+  width: min(440px, 92vw);
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: 0 20px 60px rgba(24,34,48,0.18);
+  overflow: hidden;
+}
+
+.modal-head {
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.modal-head h2 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.modal-head p {
+  font-size: 13px;
+  color: var(--color-muted);
+  margin-top: 4px;
+}
+
+.modal-body {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-body .field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-muted);
+  margin-bottom: 4px;
+}
+
+.modal-foot {
+  padding: 14px 24px 18px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.modal-error {
+  font-size: 12px;
+  color: var(--color-error);
+  padding: 6px 10px;
+  background: var(--color-error-bg);
+  border: 1px solid var(--color-error-border);
+  border-radius: var(--radius-sm);
+  display: none;
+}
+
+.modal-error.show { display: block; }
+
+.modal-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.modal-tab {
+  flex: 1;
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-muted);
+  text-align: center;
+  transition: all var(--transition);
+  border-bottom: 2px solid transparent;
+}
+
+.modal-tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.modal-tab:hover:not(.active) { background: var(--color-bg); }
+
+/* ---- Config Modal ---- */
+.config-modal .modal-box {
+  width: min(480px, 92vw);
+}
+
+.config-test-result {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  display: none;
+}
+
+.config-test-result.show { display: block; }
+.config-test-result.success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
+}
+.config-test-result.error {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border: 1px solid var(--color-error-border);
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-soft); }
+
+/* ---- Loading Spinner ---- */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- Toast ---- */
+.toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  animation: toast-in 0.25s ease;
+  max-width: 360px;
+}
+
+.toast-info { background: var(--color-text); color: #fff; }
+.toast-success { background: var(--color-success); color: #fff; }
+.toast-error { background: var(--color-error); color: #fff; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Feature-flag banner for non-Golden-Path pages */
+.scope-gate-banner {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border-bottom: 2px solid #f59e0b;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: #92400e;
+  z-index: 100;
+  position: relative;
+}
+.scope-gate-banner strong { font-weight: 700; }
+.scope-gate-banner a {
+  color: #92400e;
+  text-decoration: underline;
+  font-weight: 600;
+}
+.scope-gate-banner a:hover { color: #78350f; }
+.scope-gate-banner .scope-gate-cta {
+  background: #92400e;
+  color: #fff;
+  border: 1px solid #78350f;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scope-gate-banner .scope-gate-cta:hover {
+  background: #78350f;
+}
+/* Persistent corner badge — always visible, cannot be dismissed or hidden */
+.scope-gate-badge {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 1000;
+  background: #f59e0b;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(146, 64, 14, 0.35);
+  pointer-events: none;
+  user-select: none;
+}
+</style>
+</head>
+<body>
+<!-- Scope-gate banner: persistent marker — this page is outside the Golden Path. Always shown. -->
+<div id="scopeGateBanner" class="scope-gate-banner" role="status" aria-live="polite">
+  <span>⚠️ <strong>实验性页面（非 Golden Path）</strong> — 本页面尚未纳入 Golden Path 工作流，功能受限。主仪表盘请前往 <a href="./owner-home.html">owner-home.html</a></span>
+  <a class="scope-gate-cta" href="./owner-home.html">前往主仪表盘 →</a>
+</div>
+<!-- Persistent scope marker badge — always visible, cannot be dismissed or hidden -->
+<div id="scopeGateBadge" class="scope-gate-badge" title="非 Golden Path 实验性页面">非 Golden Path</div>
+
+<div class="app">
+  <!-- ======== Header ======== -->
+  <header class="header">
+    <div class="header-logo">
+      <!-- ZZ Logo SVG -->
+      <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+        <rect width="26" height="26" rx="6" fill="#2563eb"/>
+        <path d="M7 8h12M19 8L7 18h12" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>ZZ Agent</span>
+    </div>
+    <span id="headerSpaceName" class="header-space-name">No space selected</span>
+    <div class="header-spacer"></div>
+    <div class="header-actions">
+      <button id="refreshBtn" class="header-btn" title="Refresh">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+      </button>
+      <button id="settingsBtn" class="header-btn" title="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+      <div id="avatarBtn" class="header-avatar" title="Account">?</div>
+    </div>
+  </header>
+
+  <div class="body">
+    <!-- ======== Sidebar ======== -->
+    <aside class="sidebar">
+      <!-- Project Spaces -->
+      <div class="sidebar-section" id="spacesSection">
+        <div class="sidebar-section-head">
+          <span class="sidebar-section-title">Project Spaces</span>
+          <button id="addSpaceBtn" class="sidebar-add-btn" title="New Space">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
+        <div id="spaceFormContainer" class="inline-form" style="display:none">
+          <input id="newSpaceName" placeholder="Space name" maxlength="128">
+          <select id="newSpaceVisibility">
+            <option value="private">Private</option>
+            <option value="public">Public</option>
+          </select>
+          <div class="inline-form-actions">
+            <button id="cancelSpaceBtn" class="btn btn-ghost btn-sm">Cancel</button>
+            <button id="createSpaceBtn" class="btn btn-primary btn-sm">Create</button>
+          </div>
+        </div>
+        <div id="spaceList" class="sidebar-list"></div>
+      </div>
+
+      <!-- Agents -->
+      <div class="sidebar-section" id="agentsSection">
+        <div class="sidebar-section-head">
+          <span class="sidebar-section-title">Agents</span>
+          <button id="addAgentBtn" class="sidebar-add-btn" title="New Agent">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
+        <div id="agentFormContainer" class="inline-form" style="display:none">
+          <input id="newAgentName" placeholder="Agent name" maxlength="64">
+          <input id="newAgentEndpoint" placeholder="Endpoint URL" spellcheck="false">
+          <input id="newAgentSecret" type="password" placeholder="Invoke secret (min 16 chars)">
+          <div class="inline-form-actions">
+            <button id="cancelAgentBtn" class="btn btn-ghost btn-sm">Cancel</button>
+            <button id="createAgentBtn" class="btn btn-primary btn-sm">Register</button>
+          </div>
+        </div>
+        <div id="agentList" class="sidebar-list"></div>
+      </div>
+
+      <!-- Sessions -->
+      <div class="sidebar-section" id="sessionsSection">
+        <div class="sidebar-section-head">
+          <span class="sidebar-section-title">Sessions</span>
+          <button id="addSessionBtn" class="sidebar-add-btn" title="New Session">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
+        <div id="sessionFormContainer" class="inline-form" style="display:none">
+          <input id="newSessionTitle" placeholder="Session title (optional)" maxlength="256">
+          <div class="inline-form-actions">
+            <button id="cancelSessionBtn" class="btn btn-ghost btn-sm">Cancel</button>
+            <button id="createSessionBtn" class="btn btn-primary btn-sm">Create</button>
+          </div>
+        </div>
+        <div id="sessionList" class="sidebar-list"></div>
+      </div>
+
+      <!-- Connection Status -->
+      <div class="sidebar-footer">
+        <span id="statusDot" class="dot dot-yellow"></span>
+        <span id="statusText">Not connected</span>
+      </div>
+    </aside>
+
+    <!-- ======== Main Content ======== -->
+    <main class="main">
+      <!-- Agent Panel (top) -->
+      <div class="agent-panel" id="agentPanel">
+        <div class="agent-panel-title">Active Agents</div>
+        <div id="agentCards" class="agent-cards">
+          <span class="agent-panel-empty">Select a space to view agents</span>
+        </div>
+      </div>
+
+      <!-- Session Timeline -->
+      <div class="timeline-container">
+        <div class="timeline-header">
+          <span class="timeline-header-title" id="timelineTitle">Session Timeline</span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span id="msgCount" class="badge-status" style="font-size:11px;padding:2px 8px;border-radius:999px;display:inline-flex;align-items:center;gap:4px;">0 messages</span>
+          </div>
+        </div>
+        <div class="timeline-scroll" id="timelineScroll">
+          <div class="timeline-empty" id="timelineEmpty">
+            <div>
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#b6c1cf" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto 12px;display:block;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <div>Select a session to view messages</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Area -->
+      <div class="input-area" id="inputArea">
+        <div class="input-row">
+          <textarea id="messageInput" class="input-textarea" placeholder="Type a message..." rows="1"></textarea>
+          <div class="input-actions">
+            <div class="send-mode-toggle">
+              <button class="send-mode-btn active" data-mode="broadcast">Broadcast</button>
+              <button class="send-mode-btn" data-mode="direct">Direct</button>
+            </div>
+            <button id="sendBtn" class="btn btn-primary btn-send">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              Send
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ======== Login/Register Modal ======== -->
+<div id="authModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>Welcome to ZZ Agent</h2>
+      <p>Sign in or create an account to get started</p>
+    </div>
+    <div class="modal-tabs">
+      <button id="tabLogin" class="modal-tab active">Login</button>
+      <button id="tabRegister" class="modal-tab">Register</button>
+    </div>
+    <div class="modal-body">
+      <div id="authError" class="modal-error"></div>
+      <div class="field">
+        <label for="authEmail">Email</label>
+        <input id="authEmail" type="email" placeholder="you@company.com" autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="authPassword">Password</label>
+        <input id="authPassword" type="password" placeholder="Password" autocomplete="current-password">
+      </div>
+      <div class="field" id="displayNameField">
+        <label for="authDisplayName">Display Name</label>
+        <input id="authDisplayName" placeholder="Your name" autocomplete="name">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button id="authSubmitBtn" class="btn btn-primary">Login</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======== Config Modal ======== -->
+<div id="configModal" class="modal-overlay config-modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h2>Connection Settings</h2>
+      <p>Configure the API endpoint and authentication</p>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label for="configBaseUrl">Base URL</label>
+        <input id="configBaseUrl" spellcheck="false" placeholder="http://localhost:18080/agent">
+      </div>
+      <div class="field">
+        <label for="configToken">JWT Token</label>
+        <input id="configToken" type="password" placeholder="eyJ...">
+      </div>
+      <div id="configTestResult" class="config-test-result"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="configTestBtn" class="btn btn-ghost">Test Connection</button>
+      <div style="flex:1"></div>
+      <button id="configCancelBtn" class="btn btn-ghost">Cancel</button>
+      <button id="configSaveBtn" class="btn btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======== Toast Container ======== -->
+<div id="toastContainer" class="toast-container"></div>
+
+<!-- ======== JavaScript ======== -->
+<script>
+(function () {
+  "use strict";
+
+  /* ============================================================
+     Constants
+     ============================================================ */
+  var DEFAULT_BASE_URL = window.location.protocol === "file:"
+    ? "http://127.0.0.1:8000"
+    : window.location.origin + "/agent";
+  var LS_BASE = "zz_base_url";
+  var LS_JWT = "zz_jwt";
+
+  /* ============================================================
+     State
+     ============================================================ */
+  var state = {
+    baseUrl: localStorage.getItem(LS_BASE) || DEFAULT_BASE_URL,
+    jwt: localStorage.getItem(LS_JWT) || "",
+    user: null,
+    projects: [],
+    agents: [],
+    sessions: [],
+    messages: [],
+    events: [],
+    selectedProjectId: "",
+    selectedAgentId: "",
+    selectedSessionId: "",
+    sendMode: "broadcast",
+    busy: false,
+    authMode: "login",
+    connected: false
+  };
+
+  /* ============================================================
+     DOM References
+     ============================================================ */
+  var $ = function (id) { return document.getElementById(id); };
+
+  /* ============================================================
+     API Wrapper
+     ============================================================ */
+  function api(method, path, body) {
+    var baseUrl = state.baseUrl || DEFAULT_BASE_URL;
+    var jwt = state.jwt || "";
+    var opts = {
+      method: method,
+      headers: {
+        "Content-Type": "application/json"
+      }
+    };
+    if (jwt) {
+      opts.headers["Authorization"] = "Bearer " + jwt;
+    }
+    if (body !== undefined) {
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(baseUrl + path, opts).then(function (r) {
+      return r.text().then(function (text) {
+        var payload = null;
+        if (text) {
+          try { payload = JSON.parse(text); } catch (e) { payload = { detail: text }; }
+        }
+        if (!r.ok) {
+          var msg = "HTTP " + r.status;
+          if (payload) {
+            if (typeof payload.detail === "string") msg += ": " + payload.detail;
+            else if (payload.message) msg += ": " + payload.message;
+          }
+          return Promise.reject(new Error(msg));
+        }
+        return payload;
+      });
+    });
+  }
+
+  /** Auth API - no JWT header */
+  function authApi(method, path, body) {
+    var baseUrl = state.baseUrl || DEFAULT_BASE_URL;
+    var opts = {
+      method: method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    };
+    return fetch(baseUrl + path, opts).then(function (r) {
+      return r.text().then(function (text) {
+        var payload = text ? JSON.parse(text) : null;
+        if (!r.ok) {
+          var msg = "HTTP " + r.status;
+          if (payload && typeof payload.detail === "string") msg += ": " + payload.detail;
+          else if (payload && payload.message) msg += ": " + payload.message;
+          return Promise.reject(new Error(msg));
+        }
+        return payload;
+      });
+    });
+  }
+
+  function collection(payload) {
+    if (Array.isArray(payload)) return payload;
+    if (payload && Array.isArray(payload.data)) return payload.data;
+    return [];
+  }
+
+  /* ============================================================
+     Toast Notifications
+     ============================================================ */
+  function toast(message, type) {
+    type = type || "info";
+    var container = $("toastContainer");
+    var el = document.createElement("div");
+    el.className = "toast toast-" + type;
+    el.textContent = message;
+    container.appendChild(el);
+    setTimeout(function () {
+      el.style.opacity = "0";
+      el.style.transition = "opacity 0.3s";
+      setTimeout(function () { el.remove(); }, 300);
+    }, 3500);
+  }
+
+  /* ============================================================
+     Helpers
+     ============================================================ */
+  function shortId(id) {
+    if (!id) return "-";
+    return id.length > 12 ? id.slice(0, 8) + "..." + id.slice(-4) : id;
+  }
+
+  function timeAgo(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    var now = Date.now();
+    var diff = (now - d.getTime()) / 1000;
+    if (diff < 60) return "just now";
+    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+    return d.toLocaleDateString();
+  }
+
+  function formatTime(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function escHtml(str) {
+    if (!str) return "";
+    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  function getInitials(name) {
+    if (!name) return "?";
+    return name.charAt(0).toUpperCase();
+  }
+
+  /* ============================================================
+     Connection Status
+     ============================================================ */
+  function setStatus(status, text) {
+    var dot = $("statusDot");
+    var label = $("statusText");
+    dot.className = "dot";
+    if (status === "connected") {
+      dot.classList.add("dot-green");
+      state.connected = true;
+    } else if (status === "error") {
+      dot.classList.add("dot-red");
+      state.connected = false;
+    } else {
+      dot.classList.add("dot-yellow");
+      state.connected = false;
+    }
+    label.textContent = text || status;
+  }
+
+  /* ============================================================
+     Auth: Login / Register
+     ============================================================ */
+  function showAuthModal() {
+    $("authModal").classList.remove("hidden");
+    $("authError").classList.remove("show");
+    $("authEmail").focus();
+  }
+
+  function hideAuthModal() {
+    $("authModal").classList.add("hidden");
+  }
+
+  function setAuthMode(mode) {
+    state.authMode = mode;
+    $("tabLogin").classList.toggle("active", mode === "login");
+    $("tabRegister").classList.toggle("active", mode === "register");
+    $("displayNameField").style.display = mode === "register" ? "" : "none";
+    $("authSubmitBtn").textContent = mode === "login" ? "Login" : "Register";
+    $("authError").classList.remove("show");
+  }
+
+  function showAuthError(msg) {
+    var el = $("authError");
+    el.textContent = msg;
+    el.classList.add("show");
+  }
+
+  function doAuth() {
+    var email = $("authEmail").value.trim();
+    var password = $("authPassword").value;
+    if (!email || !password) {
+      showAuthError("Email and password are required.");
+      return;
+    }
+
+    $("authSubmitBtn").disabled = true;
+    $("authSubmitBtn").innerHTML = '<span class="spinner"></span>';
+
+    var promise;
+    if (state.authMode === "register") {
+      var displayName = $("authDisplayName").value.trim() || email.split("@")[0];
+      promise = authApi("POST", "/v1/auth/register", {
+        email: email,
+        password: password,
+        display_name: displayName
+      });
+    } else {
+      promise = authApi("POST", "/v1/auth/token", {
+        email: email,
+        password: password
+      });
+    }
+
+    promise.then(function (result) {
+      state.jwt = result.access_token || "";
+      state.user = result.user || null;
+      localStorage.setItem(LS_JWT, state.jwt);
+      hideAuthModal();
+      updateAvatar();
+      setStatus("connected", "Connected");
+      toast(state.authMode === "register" ? "Registered successfully" : "Logged in successfully", "success");
+      loadInitialData();
+    }).catch(function (err) {
+      showAuthError(err.message || "Authentication failed");
+    }).finally(function () {
+      $("authSubmitBtn").disabled = false;
+      $("authSubmitBtn").textContent = state.authMode === "login" ? "Login" : "Register";
+    });
+  }
+
+  function updateAvatar() {
+    var btn = $("avatarBtn");
+    if (state.user) {
+      var name = state.user.display_name || state.user.username || state.user.email || "?";
+      btn.textContent = getInitials(name);
+      btn.title = name;
+    } else {
+      btn.textContent = "?";
+      btn.title = "Not logged in";
+    }
+  }
+
+  /* ============================================================
+     Config Modal
+     ============================================================ */
+  function showConfigModal() {
+    $("configBaseUrl").value = state.baseUrl;
+    $("configToken").value = state.jwt;
+    $("configTestResult").classList.remove("show");
+    $("configModal").classList.remove("hidden");
+  }
+
+  function hideConfigModal() {
+    $("configModal").classList.add("hidden");
+  }
+
+  function testConnection() {
+    var url = $("configBaseUrl").value.trim().replace(/\/+$/, "");
+    var token = $("configToken").value.trim();
+    var el = $("configTestResult");
+
+    $("configTestBtn").disabled = true;
+    $("configTestBtn").innerHTML = '<span class="spinner"></span> Testing...';
+
+    var opts = { method: "GET", headers: { "Content-Type": "application/json" } };
+    if (token) opts.headers["Authorization"] = "Bearer " + token;
+
+    fetch(url + "/health", opts).then(function (r) {
+      if (r.ok) {
+        el.className = "config-test-result show success";
+        el.textContent = "Connection successful! Status: " + r.status;
+      } else {
+        el.className = "config-test-result show error";
+        el.textContent = "Connection failed. HTTP " + r.status;
+      }
+    }).catch(function (err) {
+      el.className = "config-test-result show error";
+      el.textContent = "Connection error: " + err.message;
+    }).finally(function () {
+      $("configTestBtn").disabled = false;
+      $("configTestBtn").textContent = "Test Connection";
+    });
+  }
+
+  function saveConfig() {
+    state.baseUrl = $("configBaseUrl").value.trim().replace(/\/+$/, "") || DEFAULT_BASE_URL;
+    state.jwt = $("configToken").value.trim();
+    localStorage.setItem(LS_BASE, state.baseUrl);
+    localStorage.setItem(LS_JWT, state.jwt);
+    hideConfigModal();
+    updateAvatar();
+    toast("Settings saved", "success");
+    checkAuthAndLoad();
+  }
+
+  /* ============================================================
+     Auth Check & Initial Load
+     ============================================================ */
+  function checkAuthAndLoad() {
+    if (!state.jwt) {
+      showAuthModal();
+      setStatus("disconnected", "Not authenticated");
+      return;
+    }
+    setStatus("connected", "Connected");
+    loadInitialData();
+  }
+
+  function loadInitialData() {
+    loadProjects();
+  }
+
+  /* ============================================================
+     Projects (Spaces)
+     ============================================================ */
+  function loadProjects() {
+    api("GET", "/v1/projects?limit=100").then(function (payload) {
+      state.projects = collection(payload);
+      if (!state.projects.some(function (p) { return p.id === state.selectedProjectId; })) {
+        state.selectedProjectId = state.projects[0] ? state.projects[0].id : "";
+      }
+      renderSpaceList();
+      if (state.selectedProjectId) {
+        loadProjectData();
+      }
+    }).catch(function (err) {
+      toast("Failed to load projects: " + err.message, "error");
+      setStatus("error", "API error");
+    });
+  }
+
+  function selectProject(id) {
+    state.selectedProjectId = id;
+    state.selectedAgentId = "";
+    state.selectedSessionId = "";
+    state.messages = [];
+    state.events = [];
+    renderSpaceList();
+    renderSessionList();
+    renderTimeline();
+    updateHeaderSpace();
+    if (id) {
+      loadProjectData();
+    } else {
+      state.agents = [];
+      state.sessions = [];
+      renderAgentList();
+      renderAgentCards();
+    }
+  }
+
+  function loadProjectData() {
+    var pid = encodeURIComponent(state.selectedProjectId);
+    Promise.all([
+      api("GET", "/v1/projects/" + pid + "/agents?limit=100"),
+      api("GET", "/v1/projects/" + pid + "/sessions?limit=100")
+    ]).then(function (results) {
+      state.agents = collection(results[0]);
+      state.sessions = collection(results[1]);
+      if (!state.sessions.some(function (s) { return s.id === state.selectedSessionId; })) {
+        state.selectedSessionId = state.sessions[0] ? state.sessions[0].id : "";
+      }
+      renderAgentList();
+      renderAgentCards();
+      renderSessionList();
+      updateHeaderSpace();
+      if (state.selectedSessionId) {
+        loadSessionData();
+      }
+    }).catch(function (err) {
+      toast("Failed to load project data: " + err.message, "error");
+    });
+  }
+
+  function updateHeaderSpace() {
+    var project = state.projects.find(function (p) { return p.id === state.selectedProjectId; });
+    $("headerSpaceName").textContent = project ? project.name : "No space selected";
+  }
+
+  function createSpace() {
+    var name = $("newSpaceName").value.trim();
+    var visibility = $("newSpaceVisibility").value;
+    if (!name) return;
+    api("POST", "/v1/projects", {
+      name: name,
+      visibility: visibility
+    }).then(function (project) {
+      state.projects.unshift(project);
+      state.selectedProjectId = project.id;
+      $("newSpaceName").value = "";
+      $("spaceFormContainer").style.display = "none";
+      toast("Space created: " + project.name, "success");
+      renderSpaceList();
+      updateHeaderSpace();
+      loadProjectData();
+    }).catch(function (err) {
+      toast("Failed to create space: " + err.message, "error");
+    });
+  }
+
+  /* ============================================================
+     Agents
+     ============================================================ */
+  function loadAgents() {
+    if (!state.selectedProjectId) return;
+    var pid = encodeURIComponent(state.selectedProjectId);
+    api("GET", "/v1/projects/" + pid + "/agents?limit=100").then(function (payload) {
+      state.agents = collection(payload);
+      renderAgentList();
+      renderAgentCards();
+    }).catch(function (err) {
+      toast("Failed to load agents: " + err.message, "error");
+    });
+  }
+
+  function createAgent() {
+    var name = $("newAgentName").value.trim();
+    var endpoint = $("newAgentEndpoint").value.trim();
+    var secret = $("newAgentSecret").value;
+    if (!name || !endpoint || !secret) {
+      toast("All agent fields are required", "error");
+      return;
+    }
+    if (secret.length < 16) {
+      toast("Invoke secret must be at least 16 characters", "error");
+      return;
+    }
+    var pid = encodeURIComponent(state.selectedProjectId);
+    api("POST", "/v1/projects/" + pid + "/agents", {
+      name: name,
+      endpoint_url: endpoint,
+      invoke_secret: secret
+    }).then(function (agent) {
+      state.agents.push(agent);
+      $("newAgentName").value = "";
+      $("newAgentEndpoint").value = "";
+      $("newAgentSecret").value = "";
+      $("agentFormContainer").style.display = "none";
+      toast("Agent registered: " + agent.name, "success");
+      renderAgentList();
+      renderAgentCards();
+    }).catch(function (err) {
+      toast("Failed to register agent: " + err.message, "error");
+    });
+  }
+
+  /* ============================================================
+     Sessions
+     ============================================================ */
+  function loadSessions() {
+    if (!state.selectedProjectId) return;
+    var pid = encodeURIComponent(state.selectedProjectId);
+    api("GET", "/v1/projects/" + pid + "/sessions?limit=100").then(function (payload) {
+      state.sessions = collection(payload);
+      renderSessionList();
+    }).catch(function (err) {
+      toast("Failed to load sessions: " + err.message, "error");
+    });
+  }
+
+  function selectSession(id) {
+    state.selectedSessionId = id;
+    renderSessionList();
+    if (id) {
+      loadSessionData();
+    } else {
+      state.messages = [];
+      state.events = [];
+      renderTimeline();
+    }
+  }
+
+  function loadSessionData() {
+    if (!state.selectedSessionId) return;
+    var sid = encodeURIComponent(state.selectedSessionId);
+    var timelineTitle = $("timelineTitle");
+    timelineTitle.textContent = "Session " + shortId(state.selectedSessionId);
+
+    Promise.all([
+      api("GET", "/v1/sessions/" + sid + "/messages?limit=100"),
+      api("GET", "/v1/sessions/" + sid + "/events?limit=100")
+    ]).then(function (results) {
+      state.messages = collection(results[0]);
+      state.events = collection(results[1]);
+      renderTimeline();
+    }).catch(function (err) {
+      toast("Failed to load session data: " + err.message, "error");
+    });
+  }
+
+  function createSession() {
+    if (!state.selectedProjectId) return;
+    var title = $("newSessionTitle").value.trim();
+    var pid = encodeURIComponent(state.selectedProjectId);
+    var body = {};
+    if (title) body.title = title;
+
+    // Include selected agents if any
+    var agentIds = state.agents.map(function (a) { return a.id; });
+    if (agentIds.length > 0) body.agent_ids = agentIds;
+
+    api("POST", "/v1/projects/" + pid + "/sessions", body).then(function (session) {
+      state.sessions.unshift(session);
+      state.selectedSessionId = session.id;
+      $("newSessionTitle").value = "";
+      $("sessionFormContainer").style.display = "none";
+      toast("Session created", "success");
+      renderSessionList();
+      loadSessionData();
+    }).catch(function (err) {
+      toast("Failed to create session: " + err.message, "error");
+    });
+  }
+
+  /* ============================================================
+     Send Message
+     ============================================================ */
+  function sendMessage() {
+    if (!state.selectedSessionId) {
+      toast("Select a session first", "error");
+      return;
+    }
+    var content = $("messageInput").value.trim();
+    if (!content) return;
+
+    var sid = encodeURIComponent(state.selectedSessionId);
+    var body = {
+      content: content,
+      content_type: "text",
+      delivery_mode: state.sendMode
+    };
+
+    $("sendBtn").disabled = true;
+    api("POST", "/v1/sessions/" + sid + "/messages", body).then(function () {
+      $("messageInput").value = "";
+      toast("Message sent", "success");
+      // Reload messages
+      return loadSessionData();
+    }).catch(function (err) {
+      toast("Failed to send: " + err.message, "error");
+    }).finally(function () {
+      $("sendBtn").disabled = false;
+    });
+  }
+
+  /* ============================================================
+     Change Review: Approve / Reject
+     ============================================================ */
+  function approveChange(messageId) {
+    if (!state.selectedSessionId) return;
+    var sid = encodeURIComponent(state.selectedSessionId);
+    api("POST", "/v1/sessions/" + sid + "/messages", {
+      content: "Approved",
+      content_type: "approval",
+      reply_to: messageId
+    }).then(function () {
+      toast("Change approved", "success");
+      loadSessionData();
+    }).catch(function (err) {
+      toast("Failed to approve: " + err.message, "error");
+    });
+  }
+
+  function rejectChange(messageId) {
+    if (!state.selectedSessionId) return;
+    var sid = encodeURIComponent(state.selectedSessionId);
+    api("POST", "/v1/sessions/" + sid + "/messages", {
+      content: "Rejected",
+      content_type: "rejection",
+      reply_to: messageId
+    }).then(function () {
+      toast("Change rejected", "success");
+      loadSessionData();
+    }).catch(function (err) {
+      toast("Failed to reject: " + err.message, "error");
+    });
+  }
+
+  /* ============================================================
+     Render: Sidebar Space List
+     ============================================================ */
+  function renderSpaceList() {
+    var container = $("spaceList");
+    if (state.projects.length === 0) {
+      container.innerHTML = '<div class="sidebar-empty">No spaces yet</div>';
+      return;
+    }
+    var html = "";
+    state.projects.forEach(function (p) {
+      var active = p.id === state.selectedProjectId ? " active" : "";
+      var badge = p.visibility === "public"
+        ? '<span class="sidebar-item-badge badge-public">public</span>'
+        : '<span class="sidebar-item-badge badge-private">private</span>';
+      html += '<div class="sidebar-item' + active + '" data-id="' + p.id + '">'
+        + '<span class="sidebar-item-name">' + escHtml(p.name || p.id) + '</span>'
+        + badge
+        + '</div>';
+    });
+    container.innerHTML = html;
+    container.querySelectorAll(".sidebar-item").forEach(function (el) {
+      el.addEventListener("click", function () { selectProject(el.dataset.id); });
+    });
+  }
+
+  /* ============================================================
+     Render: Sidebar Agent List
+     ============================================================ */
+  function renderAgentList() {
+    var container = $("agentList");
+    if (state.agents.length === 0) {
+      container.innerHTML = '<div class="sidebar-empty">No agents</div>';
+      return;
+    }
+    var html = "";
+    state.agents.forEach(function (a) {
+      var active = a.id === state.selectedAgentId ? " active" : "";
+      var isOnline = a.status === "online" || a.status === "active";
+      var badge = isOnline
+        ? '<span class="sidebar-item-badge badge-online">online</span>'
+        : '<span class="sidebar-item-badge badge-offline">offline</span>';
+      html += '<div class="sidebar-item' + active + '" data-id="' + a.id + '">'
+        + '<span class="sidebar-item-name">' + escHtml(a.name || a.id) + '</span>'
+        + badge
+        + '</div>';
+    });
+    container.innerHTML = html;
+    container.querySelectorAll(".sidebar-item").forEach(function (el) {
+      el.addEventListener("click", function () {
+        state.selectedAgentId = el.dataset.id;
+        renderAgentList();
+      });
+    });
+  }
+
+  /* ============================================================
+     Render: Sidebar Session List
+     ============================================================ */
+  function renderSessionList() {
+    var container = $("sessionList");
+    if (state.sessions.length === 0) {
+      container.innerHTML = '<div class="sidebar-empty">No sessions</div>';
+      return;
+    }
+    var html = "";
+    state.sessions.forEach(function (s) {
+      var active = s.id === state.selectedSessionId ? " active" : "";
+      var label = s.title || shortId(s.id);
+      var statusBadge = s.status ? '<span class="sidebar-item-badge badge-status">' + escHtml(s.status) + '</span>' : '';
+      html += '<div class="sidebar-item' + active + '" data-id="' + s.id + '">'
+        + '<span class="sidebar-item-name">' + escHtml(label) + '</span>'
+        + statusBadge
+        + '</div>';
+    });
+    container.innerHTML = html;
+    container.querySelectorAll(".sidebar-item").forEach(function (el) {
+      el.addEventListener("click", function () { selectSession(el.dataset.id); });
+    });
+  }
+
+  /* ============================================================
+     Render: Agent Cards (Main Panel)
+     ============================================================ */
+  function renderAgentCards() {
+    var container = $("agentCards");
+    if (state.agents.length === 0) {
+      container.innerHTML = '<span class="agent-panel-empty">No agents in this space</span>';
+      return;
+    }
+    var html = "";
+    state.agents.forEach(function (a) {
+      var isOnline = a.status === "online" || a.status === "active";
+      var dotClass = isOnline ? "dot-green" : "dot-red";
+      html += '<div class="agent-card">'
+        + '<span class="dot ' + dotClass + '"></span>'
+        + '<span>' + escHtml(a.name || a.id) + '</span>'
+        + '</div>';
+    });
+    container.innerHTML = html;
+  }
+
+  /* ============================================================
+     Render: Session Timeline (Messages + Events + Review Cards)
+     ============================================================ */
+  function renderTimeline() {
+    var container = $("timelineScroll");
+    var empty = $("timelineEmpty");
+    var countEl = $("msgCount");
+
+    if (!state.selectedSessionId || (state.messages.length === 0 && state.events.length === 0)) {
+      container.innerHTML = "";
+      container.appendChild(empty);
+      empty.style.display = "flex";
+      countEl.textContent = "0 messages";
+      return;
+    }
+
+    empty.style.display = "none";
+
+    // Merge messages and events, sort by created_at descending
+    var items = [];
+
+    state.messages.forEach(function (m) {
+      items.push({ type: "message", data: m, time: m.created_at || m.timestamp || "" });
+    });
+
+    state.events.forEach(function (e) {
+      items.push({ type: "event", data: e, time: e.created_at || e.timestamp || "" });
+    });
+
+    items.sort(function (a, b) {
+      return new Date(b.time).getTime() - new Date(a.time).getTime();
+    });
+
+    // Reverse to show oldest first (chronological)
+    items.reverse();
+
+    var html = "";
+    var msgCount = 0;
+
+    items.forEach(function (item) {
+      if (item.type === "message") {
+        msgCount++;
+        var m = item.data;
+        var role = (m.role || m.sender_role || "user").toLowerCase();
+        var isProposal = m.content_type === "proposal" || (typeof m.content === "string" && m.content.indexOf("diff") !== -1 && m.content.indexOf("---") !== -1);
+
+        if (isProposal) {
+          html += renderReviewCard(m);
+        } else {
+          var msgClass = "msg msg-" + (role === "agent" ? "agent" : role === "system" ? "system" : "user");
+          var senderName = m.sender_name || m.role || "user";
+          html += '<div class="' + msgClass + '">'
+            + '<div class="msg-meta">'
+            + '<span>' + escHtml(senderName) + '</span>'
+            + '<span>' + formatTime(m.created_at || m.timestamp) + '</span>'
+            + '</div>'
+            + '<div class="msg-content">' + escHtml(m.content || "") + '</div>'
+            + '</div>';
+        }
+      } else {
+        var e = item.data;
+        var eventType = e.event_type || e.type || "event";
+        html += '<div class="event-row">'
+          + '<span class="event-type">' + escHtml(eventType) + '</span>'
+          + '<span>' + escHtml(typeof e.payload === "string" ? e.payload : JSON.stringify(e.payload || e.data || "").slice(0, 120)) + '</span>'
+          + '<span class="event-time">' + formatTime(e.created_at || e.timestamp) + '</span>'
+          + '</div>';
+      }
+    });
+
+    container.innerHTML = html;
+    countEl.textContent = msgCount + " messages";
+
+    // Scroll to bottom
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function renderReviewCard(m) {
+    var content = m.content || "";
+    var description = content;
+    var diffText = "";
+
+    // Try to extract diff from content
+    var diffMatch = content.match(/```[\s\S]*?```/);
+    if (diffMatch) {
+      diffText = diffMatch[0].replace(/```\w*\n?/g, "").replace(/```$/g, "");
+      description = content.replace(diffMatch[0], "").trim();
+    } else if (content.indexOf("---") !== -1 && content.indexOf("+++") !== -1) {
+      var lines = content.split("\n");
+      var descLines = [];
+      var diffLines = [];
+      var inDiff = false;
+      lines.forEach(function (line) {
+        if (line.match(/^(---|\+\+\+|@@)/)) {
+          inDiff = true;
+        }
+        if (inDiff) {
+          diffLines.push(line);
+        } else {
+          descLines.push(line);
+        }
+      });
+      description = descLines.join("\n").trim();
+      diffText = diffLines.join("\n");
+    }
+
+    var diffHtml = "";
+    if (diffText) {
+      var diffLinesArr = diffText.split("\n");
+      diffHtml = '<div class="diff-block">';
+      diffLinesArr.forEach(function (line) {
+        if (line.charAt(0) === "+") {
+          diffHtml += '<div class="diff-add">' + escHtml(line) + '</div>';
+        } else if (line.charAt(0) === "-") {
+          diffHtml += '<div class="diff-del">' + escHtml(line) + '</div>';
+        } else {
+          diffHtml += '<div>' + escHtml(line) + '</div>';
+        }
+      });
+      diffHtml += '</div>';
+    }
+
+    var msgId = m.id || "";
+    return '<div class="review-card">'
+      + '<div class="review-card-header">'
+      + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>'
+      + '<span class="review-card-title">Change Review</span>'
+      + '<span style="margin-left:auto;font-size:11px;color:var(--color-soft)">' + formatTime(m.created_at || m.timestamp) + '</span>'
+      + '</div>'
+      + '<div class="review-card-body">'
+      + (description ? '<div class="review-description">' + escHtml(description) + '</div>' : '')
+      + diffHtml
+      + '</div>'
+      + '<div class="review-card-actions">'
+      + '<button class="btn btn-success btn-sm" onclick="(window.__approveChange||function(){})(' + "'" + msgId + "'" + ')">Approve</button>'
+      + '<button class="btn btn-danger btn-sm" onclick="(window.__rejectChange||function(){})(' + "'" + msgId + "'" + ')">Reject</button>'
+      + '</div>'
+      + '</div>';
+  }
+
+  /* ============================================================
+     Refresh All
+     ============================================================ */
+  function refreshAll() {
+    if (state.jwt) {
+      loadProjects();
+      toast("Refreshed", "info");
+    }
+  }
+
+  /* ============================================================
+     Event Bindings
+     ============================================================ */
+  function bindEvents() {
+    // Auth modal
+    $("tabLogin").addEventListener("click", function () { setAuthMode("login"); });
+    $("tabRegister").addEventListener("click", function () { setAuthMode("register"); });
+    $("authSubmitBtn").addEventListener("click", doAuth);
+    $("authEmail").addEventListener("keydown", function (e) { if (e.key === "Enter") doAuth(); });
+    $("authPassword").addEventListener("keydown", function (e) { if (e.key === "Enter") doAuth(); });
+    $("authDisplayName").addEventListener("keydown", function (e) { if (e.key === "Enter") doAuth(); });
+
+    // Config modal
+    $("settingsBtn").addEventListener("click", showConfigModal);
+    $("configTestBtn").addEventListener("click", testConnection);
+    $("configSaveBtn").addEventListener("click", saveConfig);
+    $("configCancelBtn").addEventListener("click", hideConfigModal);
+
+    // Close modals on overlay click
+    $("authModal").addEventListener("click", function (e) {
+      if (e.target === $("authModal") && state.jwt) hideAuthModal();
+    });
+    $("configModal").addEventListener("click", function (e) {
+      if (e.target === $("configModal")) hideConfigModal();
+    });
+
+    // Avatar -> logout/settings
+    $("avatarBtn").addEventListener("click", function () {
+      if (state.jwt) {
+        // Toggle a simple menu - for now just show config
+        showConfigModal();
+      } else {
+        showAuthModal();
+      }
+    });
+
+    // Refresh
+    $("refreshBtn").addEventListener("click", refreshAll);
+
+    // Sidebar: add buttons
+    $("addSpaceBtn").addEventListener("click", function () {
+      var form = $("spaceFormContainer");
+      form.style.display = form.style.display === "none" ? "" : "none";
+    });
+    $("cancelSpaceBtn").addEventListener("click", function () {
+      $("spaceFormContainer").style.display = "none";
+    });
+    $("createSpaceBtn").addEventListener("click", createSpace);
+    $("newSpaceName").addEventListener("keydown", function (e) { if (e.key === "Enter") createSpace(); });
+
+    $("addAgentBtn").addEventListener("click", function () {
+      if (!state.selectedProjectId) { toast("Select a space first", "error"); return; }
+      var form = $("agentFormContainer");
+      form.style.display = form.style.display === "none" ? "" : "none";
+    });
+    $("cancelAgentBtn").addEventListener("click", function () {
+      $("agentFormContainer").style.display = "none";
+    });
+    $("createAgentBtn").addEventListener("click", createAgent);
+
+    $("addSessionBtn").addEventListener("click", function () {
+      if (!state.selectedProjectId) { toast("Select a space first", "error"); return; }
+      var form = $("sessionFormContainer");
+      form.style.display = form.style.display === "none" ? "" : "none";
+    });
+    $("cancelSessionBtn").addEventListener("click", function () {
+      $("sessionFormContainer").style.display = "none";
+    });
+    $("createSessionBtn").addEventListener("click", createSession);
+    $("newSessionTitle").addEventListener("keydown", function (e) { if (e.key === "Enter") createSession(); });
+
+    // Message input
+    $("sendBtn").addEventListener("click", sendMessage);
+    $("messageInput").addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    // Auto-resize textarea
+    $("messageInput").addEventListener("input", function () {
+      this.style.height = "auto";
+      this.style.height = Math.min(this.scrollHeight, 120) + "px";
+    });
+
+    // Send mode toggle
+    document.querySelectorAll(".send-mode-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        document.querySelectorAll(".send-mode-btn").forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        state.sendMode = btn.dataset.mode;
+      });
+    });
+
+    // Expose approve/reject to global for inline onclick
+    window.__approveChange = approveChange;
+    window.__rejectChange = rejectChange;
+  }
+
+  /* ============================================================
+     Init
+     ============================================================ */
+  function init() {
+    bindEvents();
+    setAuthMode("login");
+    updateAvatar();
+    checkAuthAndLoad();
+  }
+
+  // Run on DOM ready
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Collaboration OS</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #333;
+  background: #fff;
+  line-height: 1.6;
+}
+a { color: inherit; text-decoration: none; }
+.container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+/* Nav */
+nav {
+  background: #1a1a2e;
+  padding: 0 24px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+nav .inner {
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 52px;
+}
+nav .logo { color: #fff; font-size: 16px; font-weight: 700; letter-spacing: -0.5px; }
+nav .logo span { color: #e94560; }
+nav .nav-links { display: flex; gap: 24px; }
+nav .nav-links a { color: rgba(255,255,255,0.7); font-size: 13px; transition: color .15s; }
+nav .nav-links a:hover { color: #fff; }
+
+/* Hero */
+.hero {
+  padding: 80px 0 64px;
+  border-bottom: 1px solid #eee;
+}
+.hero .container {
+  display: flex;
+  align-items: center;
+  gap: 48px;
+}
+.hero-text { flex: 1; }
+.hero-text h1 {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1a1a2e;
+  line-height: 1.25;
+  margin-bottom: 12px;
+}
+.hero-text p {
+  font-size: 15px;
+  color: #666;
+  margin-bottom: 28px;
+  max-width: 440px;
+}
+.hero-actions { display: flex; gap: 12px; }
+.btn-primary {
+  display: inline-block;
+  background: #e94560;
+  color: #fff;
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+}
+.btn-secondary {
+  display: inline-block;
+  background: transparent;
+  color: #1a1a2e;
+  padding: 10px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  border: 1px solid #1a1a2e;
+  cursor: pointer;
+}
+.btn-primary:hover { background: #d63b55; }
+.btn-secondary:hover { background: #f8f8f8; }
+.hero-illustration {
+  flex-shrink: 0;
+  width: 200px;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Section */
+section { padding: 64px 0; }
+section + section { border-top: 1px solid #eee; }
+.section-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #e94560;
+  margin-bottom: 8px;
+}
+.section-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin-bottom: 32px;
+}
+
+/* Scenarios - 3 cards */
+.scenarios-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+.scenario-card {
+  border: 1px solid #e8e8e8;
+  padding: 28px 24px;
+  transition: border-color .15s;
+}
+.scenario-card:hover { border-color: #1a1a2e; }
+.scenario-card .card-icon {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 16px;
+}
+.scenario-card h3 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1a1a2e;
+  margin-bottom: 8px;
+}
+.scenario-card p {
+  font-size: 13px;
+  color: #666;
+  line-height: 1.6;
+}
+
+/* Features */
+.features-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+.features-list li {
+  padding: 16px 0;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 14px;
+  padding-right: 32px;
+}
+.features-list li:nth-child(odd) { border-right: 1px solid #eee; padding-right: 32px; }
+.features-list li:nth-child(even) { padding-left: 32px; }
+.features-list .feat-num {
+  font-size: 12px;
+  font-weight: 700;
+  color: #e94560;
+  flex-shrink: 0;
+  width: 20px;
+}
+.features-list .feat-name { font-weight: 600; color: #1a1a2e; }
+.features-list .feat-desc { color: #666; font-size: 13px; }
+.features-list .feat-badge {
+  display: inline-block;
+  font-size: 10px;
+  background: #fef0f2;
+  color: #e94560;
+  padding: 1px 6px;
+  margin-left: 6px;
+  font-weight: 500;
+}
+
+/* Quick Start */
+.code-block {
+  background: #1a1a2e;
+  color: #e0e0e0;
+  padding: 24px;
+  font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-x: auto;
+  white-space: pre;
+}
+.code-block .comment { color: #6a6a8a; }
+.code-block .cmd { color: #fff; }
+.code-block .flag { color: #e94560; }
+.code-block .string { color: #a8d8a8; }
+
+/* Comparison */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+th, td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+th {
+  background: #f8f8f8;
+  font-weight: 600;
+  color: #1a1a2e;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+td { color: #555; }
+table .highlight-col {
+  background: #f8f4ff;
+  font-weight: 600;
+  color: #1a1a2e;
+}
+table .col-head {
+  font-weight: 700;
+  color: #1a1a2e;
+  background: #1a1a2e;
+  color: #fff;
+}
+.check { color: #2e9e5a; font-weight: 700; }
+.cross { color: #ccc; }
+.partial { color: #e9a520; }
+
+/* Footer */
+footer {
+  background: #1a1a2e;
+  color: rgba(255,255,255,0.6);
+  padding: 32px 0;
+  font-size: 13px;
+}
+footer .container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+footer a { color: rgba(255,255,255,0.8); }
+footer a:hover { color: #fff; }
+footer .footer-links { display: flex; gap: 20px; }
+
+/* Responsive */
+@media (max-width: 768px) {
+  .hero .container { flex-direction: column; gap: 32px; text-align: center; }
+  .hero-text p { max-width: 100%; }
+  .hero-actions { justify-content: center; }
+  .hero-illustration { width: 140px; height: 140px; }
+  .scenarios-grid { grid-template-columns: 1fr; }
+  .features-list { grid-template-columns: 1fr; }
+  .features-list li:nth-child(odd) { border-right: none; padding-right: 0; }
+  .features-list li:nth-child(even) { padding-left: 0; }
+  nav .nav-links { gap: 16px; }
+  .hero-text h1 { font-size: 24px; }
+  section { padding: 48px 0; }
+  table { font-size: 12px; }
+  th, td { padding: 8px 10px; }
+  footer .container { flex-direction: column; gap: 12px; text-align: center; }
+}
+@media (max-width: 480px) {
+  .hero-actions { flex-direction: column; }
+  .hero-actions a { display: block; text-align: center; }
+  nav .nav-links { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <div class="inner">
+    <div class="logo">zhuzeyang<span>.xyz</span>/agent</div>
+    <div class="nav-links">
+      <a href="#scenarios">场景</a>
+      <a href="#features">功能</a>
+      <a href="#quickstart">快速开始</a>
+      <a href="#comparison">对比</a>
+    </div>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-text">
+      <h1>企业级可信 Agent 协作平台</h1>
+      <p>安全、可审计的多 Agent 协作与项目管理基础设施。让多个 AI Agent 在受控环境中协同工作，每一步操作可追溯、可审批。</p>
+      <div class="hero-actions">
+        <a href="/agent/product.html" class="btn-primary">开始使用</a>
+        <a href="/agent/docs" class="btn-secondary">查看 API 文档</a>
+      </div>
+    </div>
+    <div class="hero-illustration">
+      <!-- SVG: 3 nodes connected, representing agent collaboration -->
+      <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+        <!-- Connection lines -->
+        <line x1="100" y1="40" x2="40" y2="140" stroke="#e94560" stroke-width="2" opacity="0.4"/>
+        <line x1="100" y1="40" x2="160" y2="140" stroke="#e94560" stroke-width="2" opacity="0.4"/>
+        <line x1="40" y1="140" x2="160" y2="140" stroke="#1a1a2e" stroke-width="2" opacity="0.3"/>
+        <!-- Node top -->
+        <circle cx="100" cy="40" r="22" fill="#1a1a2e"/>
+        <rect x="92" y="33" width="16" height="3" rx="1" fill="#fff"/>
+        <rect x="92" y="39" width="16" height="3" rx="1" fill="#fff"/>
+        <rect x="92" y="45" width="10" height="3" rx="1" fill="#fff"/>
+        <!-- Node bottom-left -->
+        <circle cx="40" cy="140" r="22" fill="#1a1a2e"/>
+        <path d="M32 135h16v2H32zM32 140h12v2H32zM32 145h16v2H32z" fill="#fff"/>
+        <!-- Node bottom-right -->
+        <circle cx="160" cy="140" r="22" fill="#e94560"/>
+        <circle cx="152" cy="137" r="3" fill="#fff"/>
+        <circle cx="168" cy="137" r="3" fill="#fff"/>
+        <rect x="151" y="144" width="18" height="2" rx="1" fill="#fff"/>
+        <!-- Labels -->
+        <text x="100" y="78" text-anchor="middle" font-size="9" fill="#666" font-family="sans-serif">Orchestrator</text>
+        <text x="40" y="176" text-anchor="middle" font-size="9" fill="#666" font-family="sans-serif">Agent A</text>
+        <text x="160" y="176" text-anchor="middle" font-size="9" fill="#666" font-family="sans-serif">Agent B</text>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<!-- Scenarios -->
+<section id="scenarios">
+  <div class="container">
+    <div class="section-label">Core Scenarios</div>
+    <div class="section-title">三大核心场景</div>
+    <div class="scenarios-grid">
+      <div class="scenario-card">
+        <div class="card-icon">
+          <svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="4" width="14" height="10" rx="1" fill="#1a1a2e"/>
+            <rect x="20" y="4" width="14" height="10" rx="1" fill="#1a1a2e" opacity="0.6"/>
+            <rect x="2" y="22" width="14" height="10" rx="1" fill="#1a1a2e" opacity="0.6"/>
+            <rect x="20" y="22" width="14" height="10" rx="1" fill="#1a1a2e"/>
+            <path d="M9 14v8M27 14v8" stroke="#e94560" stroke-width="2"/>
+            <circle cx="9" cy="14" r="2" fill="#e94560"/>
+            <circle cx="27" cy="14" r="2" fill="#e94560"/>
+          </svg>
+        </div>
+        <h3>跨 Agent 协作自动化</h3>
+        <p>多个 Agent 在同一项目空间中分工协作，通过 Channel 消息机制实时协调任务流转，无需人工介入。</p>
+      </div>
+      <div class="scenario-card">
+        <div class="card-icon">
+          <svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4" y="6" width="28" height="24" rx="1" fill="none" stroke="#1a1a2e" stroke-width="2"/>
+            <rect x="10" y="14" width="16" height="2" fill="#1a1a2e"/>
+            <rect x="10" y="19" width="12" height="2" fill="#1a1a2e" opacity="0.5"/>
+            <circle cx="26" cy="28" r="6" fill="#e94560"/>
+            <path d="M23.5 28l1.5 1.5 3.5-3.5" stroke="#fff" stroke-width="1.5" fill="none"/>
+          </svg>
+        </div>
+        <h3>安全消息与审计</h3>
+        <p>所有 Agent 间的消息通信加密传输，操作日志全量记录，支持按时间、Agent、操作类型多维度审计查询。</p>
+      </div>
+      <div class="scenario-card">
+        <div class="card-icon">
+          <svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+            <rect x="6" y="8" width="24" height="20" rx="1" fill="#1a1a2e" opacity="0.15" stroke="#1a1a2e" stroke-width="1.5"/>
+            <path d="M12 16h12M12 20h8M12 24h10" stroke="#1a1a2e" stroke-width="1.5"/>
+            <rect x="26" y="6" width="6" height="8" rx="1" fill="#e94560"/>
+            <path d="M28 9h2M29 8v2" stroke="#fff" stroke-width="0.8"/>
+          </svg>
+        </div>
+        <h3>知识/文件集中管理与审批</h3>
+        <p>项目级文件上传与共享上下文管理，Agent 对关键配置的变更需通过 Change Review 审批后生效。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section id="features">
+  <div class="container">
+    <div class="section-label">Core Features</div>
+    <div class="section-title">五大核心功能</div>
+    <ul class="features-list">
+      <li>
+        <span class="feat-num">01</span>
+        <div>
+          <span class="feat-name">Agent Registry / CRUD</span><br>
+          <span class="feat-desc">注册、查询、更新、注销 Agent，统一管理所有参与者身份与端点。</span>
+        </div>
+      </li>
+      <li>
+        <span class="feat-num">02</span>
+        <div>
+          <span class="feat-name">Project Spaces</span><br>
+          <span class="feat-desc">按项目隔离协作空间，成员、文件、消息、审计日志均在空间内封闭。</span>
+        </div>
+      </li>
+      <li>
+        <span class="feat-num">03</span>
+        <div>
+          <span class="feat-name">Shared Context / File Upload</span><br>
+          <span class="feat-desc">上传知识文件，构建项目共享上下文，所有 Agent 按需检索引用。</span>
+        </div>
+      </li>
+      <li>
+        <span class="feat-num">04</span>
+        <div>
+          <span class="feat-name">Channel-based Collaboration</span><br>
+          <span class="feat-desc">频道式消息通道，支持 Agent 间点对点与广播通信，事件驱动。</span>
+        </div>
+      </li>
+      <li>
+        <span class="feat-num">05</span>
+        <div>
+          <span class="feat-name">Change Review</span><span class="feat-badge">最强差异化</span><br>
+          <span class="feat-desc">Agent 变更请求经人工或规则审批后生效，杜绝未经授权的操作风险。</span>
+        </div>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- Quick Start -->
+<section id="quickstart">
+  <div class="container">
+    <div class="section-label">Quick Start</div>
+    <div class="section-title">三步上手</div>
+    <div class="code-block"><span class="comment"># 1. 安装 CLI</span>
+<span class="cmd">pip install zz-agent-sdk</span>
+
+<span class="comment"># 2. 创建项目空间</span>
+<span class="cmd">zz projects create</span> <span class="flag">--name</span> <span class="string">"My Project"</span>
+
+<span class="comment"># 3. 注册 Agent</span>
+<span class="cmd">zz agents register</span> <span class="flag">--name</span> <span class="string">"Code Reviewer"</span> <span class="flag">--endpoint</span> <span class="string">https://reviewer.example.com</span>
+
+<span class="comment"># 4. 发送协作消息</span>
+<span class="cmd">zz channels send</span> <span class="flag">--channel</span> <span class="string">"general"</span> <span class="flag">--from</span> <span class="string">"Code Reviewer"</span> <span class="flag">--message</span> <span class="string">"PR #42 审核完成"</span></div>
+  </div>
+</section>
+
+<!-- Comparison -->
+<section id="comparison">
+  <div class="container">
+    <div class="section-label">Comparison</div>
+    <div class="section-title">与主流框架对比</div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:22%">维度</th>
+            <th class="highlight-col" style="width:26%">your-platform</th>
+            <th style="width:17%">AutoGen</th>
+            <th style="width:17%">CrewAI</th>
+            <th style="width:18%">LangGraph</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>定位</td>
+            <td class="highlight-col">企业级 Agent 协作基础设施</td>
+            <td>多 Agent 对话框架</td>
+            <td>角色扮演协作框架</td>
+            <td>有状态图编排</td>
+          </tr>
+          <tr>
+            <td>安全 / 审计</td>
+            <td class="highlight-col"><span class="check">&#10003;</span> 全量审计日志</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="partial">&#126;</span> 需自建</td>
+          </tr>
+          <tr>
+            <td>Change Review</td>
+            <td class="highlight-col"><span class="check">&#10003;</span> 内置审批流</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+          </tr>
+          <tr>
+            <td>企业级治理</td>
+            <td class="highlight-col"><span class="check">&#10003;</span> 项目空间隔离</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="partial">&#126;</span> 基础</td>
+            <td><span class="partial">&#126;</span> 基础</td>
+          </tr>
+          <tr>
+            <td>文件/知识管理</td>
+            <td class="highlight-col"><span class="check">&#10003;</span> 内置共享上下文</td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+            <td><span class="cross">&#10005;</span></td>
+          </tr>
+          <tr>
+            <td>部署模式</td>
+            <td class="highlight-col">私有化 / 内网</td>
+            <td>开源 SDK</td>
+            <td>开源 + 云平台</td>
+            <td>开源 SDK</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <div>Agent Collaboration OS &mdash; Enterprise Agent Collaboration Platform</div>
+    <div class="footer-links">
+      <a href="https://github.com/zhuzeyang" target="_blank" rel="noopener">GitHub</a>
+      <a href="/agent/docs">API Docs</a>
+      <a href="/agent/product.html">Dashboard</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

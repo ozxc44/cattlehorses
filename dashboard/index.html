@@ -1,0 +1,2469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>zz-agent Runtime Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef2f6;
+      --panel: #ffffff;
+      --panel-2: #f8fafc;
+      --line: #d7dee8;
+      --line-strong: #b6c1cf;
+      --text: #182230;
+      --muted: #61708a;
+      --soft: #7c8aa1;
+      --accent: #2563eb;
+      --accent-strong: #1d4ed8;
+      --good: #047857;
+      --warn: #b45309;
+      --bad: #b91c1c;
+      --shadow: 0 12px 28px rgba(24, 34, 48, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.94);
+      backdrop-filter: blur(12px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .brand strong {
+      font-size: 16px;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      max-width: 100%;
+      padding: 2px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: var(--panel-2);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .pill.good {
+      border-color: rgba(4, 120, 87, 0.22);
+      background: #ecfdf5;
+      color: var(--good);
+    }
+
+    .pill.warn {
+      border-color: rgba(180, 83, 9, 0.24);
+      background: #fffbeb;
+      color: var(--warn);
+    }
+
+    .pill.bad {
+      border-color: rgba(185, 28, 28, 0.22);
+      background: #fef2f2;
+      color: var(--bad);
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .shell {
+      width: min(1500px, 100%);
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      grid-template-columns: minmax(270px, 330px) minmax(420px, 1fr) minmax(320px, 420px);
+      gap: 14px;
+      align-items: start;
+    }
+
+    .panel {
+      min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      min-height: 44px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: #fbfcfe;
+    }
+
+    .panel-title {
+      min-width: 0;
+      font-weight: 700;
+      color: #111827;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .panel-body {
+      padding: 12px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .row.wrap {
+      flex-wrap: wrap;
+    }
+
+    .row > * {
+      min-width: 0;
+    }
+
+    .field {
+      display: grid;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .field.grow {
+      flex: 1 1 160px;
+    }
+
+    label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      padding: 8px 9px;
+      outline: none;
+    }
+
+    textarea {
+      min-height: 84px;
+      resize: vertical;
+    }
+
+    input:focus,
+    textarea:focus,
+    select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 34px;
+      padding: 7px 11px;
+      border-radius: 6px;
+      background: #e8edf5;
+      color: #263449;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      background: #dce4ef;
+    }
+
+    .btn.primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn.primary:hover {
+      background: var(--accent-strong);
+    }
+
+    .btn.good {
+      background: #059669;
+      color: #fff;
+    }
+
+    .btn.good:hover {
+      background: #047857;
+    }
+
+    .btn.ghost {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--line);
+    }
+
+    .btn.icon {
+      width: 34px;
+      padding: 0;
+      font-size: 16px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 10px;
+      min-width: 0;
+    }
+
+    .section h2,
+    .section h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      letter-spacing: 0;
+    }
+
+    .list {
+      display: grid;
+      gap: 6px;
+      max-height: 238px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .item {
+      width: 100%;
+      display: grid;
+      gap: 3px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      text-align: left;
+      color: var(--text);
+    }
+
+    .item:hover,
+    .item.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.09);
+    }
+
+    .item-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+      font-weight: 700;
+    }
+
+    .item-title span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .muted,
+    .meta {
+      color: var(--muted);
+    }
+
+    .meta {
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    .identity-paths {
+      padding: 8px;
+      border: 1px dashed var(--line-strong);
+      border-radius: 6px;
+      background: #fff;
+      line-height: 1.55;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+    }
+
+    .tab {
+      min-height: 32px;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .tab.active {
+      background: #fff;
+      color: var(--accent);
+      box-shadow: 0 1px 4px rgba(24, 34, 48, 0.08);
+    }
+
+    .checkbox-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 6px;
+      max-height: 132px;
+      overflow: auto;
+    }
+
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font-size: 12px;
+      min-width: 0;
+    }
+
+    .check input {
+      width: auto;
+      flex: 0 0 auto;
+    }
+
+    .check span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .messages,
+    .events,
+    .health-box,
+    .log {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .messages {
+      height: 360px;
+      padding: 10px;
+      display: grid;
+      align-content: start;
+      gap: 8px;
+    }
+
+    .message {
+      display: grid;
+      gap: 3px;
+      padding: 8px 9px;
+      border-radius: 7px;
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      overflow-wrap: anywhere;
+    }
+
+    .message.user {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+    }
+
+    .message.agent {
+      background: #f0fdf4;
+      border-color: #bbf7d0;
+    }
+
+    .message.system {
+      background: #f8fafc;
+      color: var(--muted);
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 8px;
+      padding: 8px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .event:last-child {
+      border-bottom: 0;
+    }
+
+    .event-type {
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .event-payload {
+      margin: 4px 0 0;
+      color: #39465b;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+    }
+
+    .events {
+      height: 410px;
+    }
+
+    .health-box {
+      max-height: 260px;
+      padding: 9px;
+    }
+
+    .log {
+      max-height: 140px;
+      padding: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .empty {
+      padding: 14px;
+      color: var(--soft);
+      text-align: center;
+      border: 1px dashed var(--line-strong);
+      border-radius: 8px;
+      background: #fff;
+    }
+
+    .status-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .cred-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(24, 34, 48, 0.45);
+    }
+
+    .cred-modal-box {
+      width: min(520px, 94vw);
+      max-height: 90vh;
+      overflow: auto;
+      background: var(--panel);
+      border: 2px solid var(--accent);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+    }
+
+    .cred-modal-box h3 {
+      margin: 0 0 10px;
+      font-size: 15px;
+    }
+
+    .cred-key-box {
+      padding: 10px;
+      border: 2px solid var(--warn);
+      border-radius: 6px;
+      background: #fffbeb;
+      margin: 10px 0;
+      word-break: break-all;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      user-select: all;
+    }
+
+    .cred-warning {
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+      padding: 8px 10px;
+      border: 1px solid rgba(180, 83, 9, 0.3);
+      border-radius: 6px;
+      background: #fffbeb;
+      color: var(--warn);
+      font-size: 12px;
+      margin: 8px 0;
+    }
+
+    .cred-warning strong {
+      color: var(--bad);
+    }
+
+    .revoked-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border: 1px solid rgba(185, 28, 28, 0.3);
+      border-radius: 999px;
+      background: #fef2f2;
+      color: var(--bad);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .diff-box {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 6px 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .diff-head {
+      padding: 4px 8px;
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--line);
+      font-weight: 700;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .diff-content {
+      padding: 8px;
+      max-height: 200px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #fff;
+    }
+
+    .diff-added {
+      color: var(--good);
+    }
+
+    .diff-removed {
+      color: var(--bad);
+    }
+
+    .conflict-notice {
+      padding: 8px 10px;
+      border: 1px solid rgba(180, 83, 9, 0.35);
+      border-radius: 6px;
+      background: #fffbeb;
+      color: var(--warn);
+      font-size: 12px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 1180px) {
+      .shell {
+        grid-template-columns: 320px minmax(0, 1fr);
+      }
+
+      .right-col {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+
+      .top-actions {
+        flex-wrap: wrap;
+      }
+
+      .shell {
+        grid-template-columns: 1fr;
+        padding: 10px;
+      }
+
+      .split {
+        grid-template-columns: 1fr;
+      }
+
+      .messages,
+      .events {
+        height: 320px;
+      }
+    }
+
+    /* Feature-flag banner for non-Golden-Path pages */
+    .scope-gate-banner {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border-bottom: 2px solid #f59e0b;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      color: #92400e;
+      z-index: 100;
+      position: relative;
+    }
+    .scope-gate-banner strong { font-weight: 700; }
+    .scope-gate-banner a {
+      color: #92400e;
+      text-decoration: underline;
+      font-weight: 600;
+    }
+    .scope-gate-banner a:hover { color: #78350f; }
+    .scope-gate-banner .scope-gate-cta {
+      background: #92400e;
+      color: #fff;
+      border: 1px solid #78350f;
+      border-radius: 4px;
+      padding: 4px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .scope-gate-banner .scope-gate-cta:hover {
+      background: #78350f;
+    }
+    /* Persistent corner badge — always visible, cannot be dismissed or hidden */
+    .scope-gate-badge {
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      z-index: 1000;
+      background: #f59e0b;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      box-shadow: 0 2px 8px rgba(146, 64, 14, 0.35);
+      pointer-events: none;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- Scope-gate banner: persistent marker — this page is outside the Golden Path. Always shown. -->
+  <div id="scopeGateBanner" class="scope-gate-banner" role="status" aria-live="polite">
+    <span>⚠️ <strong>实验性页面（非 Golden Path）</strong> — 本页面尚未纳入 Golden Path 工作流，功能受限。主仪表盘请前往 <a href="./workbench.html">项目工作台</a></span>
+    <a class="scope-gate-cta" href="./workbench.html">前往项目工作台 →</a>
+  </div>
+  <!-- Persistent scope marker badge — always visible, cannot be dismissed or hidden -->
+  <div id="scopeGateBadge" class="scope-gate-badge" title="非 Golden Path 实验性页面">非 Golden Path</div>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <strong>zz-agent Runtime</strong>
+        <span class="pill">V1 dashboard</span>
+        <span id="connectionPill" class="pill warn">not checked</span>
+      </div>
+      <div class="top-actions">
+        <span id="principalPill" class="pill">no principal</span>
+        <a class="btn btn-primary" href="./workbench.html" style="background:var(--accent);color:#fff;font-weight:600;">🚀 项目工作台</a>
+        <a class="btn" href="./agent-start.html">Agent 启动引导</a>
+        <button id="refreshAllBtn" class="btn">Refresh</button>
+        <button id="clearStorageBtn" class="btn ghost">Clear</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <aside class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Connection</div>
+          <button id="checkMeBtn" class="btn primary">Check /me</button>
+        </div>
+        <div class="panel-body stack">
+          <div class="field">
+            <label for="baseUrl">Base URL</label>
+            <input id="baseUrl" autocomplete="url" spellcheck="false" value="http://127.0.0.1:8000">
+          </div>
+          <div class="field">
+            <label for="jwt">Token（高级 / 调试）</label>
+            <input id="jwt" type="password" autocomplete="off" spellcheck="false" placeholder="eyJ...">
+          </div>
+          <div class="row wrap">
+            <button id="saveConfigBtn" class="btn good">Save config</button>
+            <button id="toggleTokenBtn" class="btn ghost">Show token</button>
+            <button id="downloadUserIdentityBtn" class="btn">Download identity</button>
+          </div>
+          <div class="identity-paths meta">
+            Save identity as <span class="mono">~/.config/agent-platform/identity.json</span> on Linux/WSL,
+            <span class="mono">%APPDATA%\AgentPlatform\identity.json</span> on Windows, or
+            <span class="mono">~/Library/Application Support/Agent Platform/identity.json</span> on macOS.
+          </div>
+          <div class="section">
+            <h2>Sign in</h2>
+            <form id="authForm" class="stack" autocomplete="on">
+              <div class="field">
+                <label for="authEmail">Email</label>
+                <input id="authEmail" type="email" autocomplete="email" placeholder="agent-owner@example.com">
+              </div>
+              <div class="field">
+                <label for="authPassword">Password</label>
+                <input id="authPassword" type="password" autocomplete="current-password" placeholder="Password">
+              </div>
+              <div class="field">
+                <label for="authDisplayName">Display name</label>
+                <input id="authDisplayName" autocomplete="name" placeholder="Runtime Owner">
+              </div>
+              <div class="row wrap">
+                <button id="loginBtn" class="btn primary" type="button">Login</button>
+                <button id="registerBtn" class="btn" type="button">Register</button>
+              </div>
+            </form>
+          </div>
+          <div class="section">
+            <h2>Projects</h2>
+            <div class="row">
+              <button id="loadProjectsBtn" class="btn primary">List</button>
+              <button id="newProjectBtn" class="btn">New</button>
+            </div>
+            <form id="projectForm" class="stack hidden" autocomplete="off">
+              <div class="field">
+                <label for="projectName">Name</label>
+                <input id="projectName" required maxlength="128" placeholder="Runtime Demo">
+              </div>
+              <div class="field">
+                <label for="projectDescription">Description</label>
+                <input id="projectDescription" maxlength="1024" placeholder="V1 runtime loop smoke test">
+              </div>
+              <div class="field">
+                <label for="projectVisibility">Visibility</label>
+                <select id="projectVisibility">
+                  <option value="private">Private</option>
+                  <option value="public">Public</option>
+                </select>
+              </div>
+              <button class="btn good" type="submit">Create project</button>
+            </form>
+            <div id="projectList" class="list" aria-live="polite"></div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div class="panel-title" id="workspaceTitle">No project selected</div>
+          <div class="status-line">
+            <span id="projectPill" class="pill">project -</span>
+            <span id="sessionPill" class="pill">session -</span>
+          </div>
+        </div>
+        <div class="panel-body stack">
+          <div class="tabs" role="tablist" aria-label="Runtime actions">
+            <button class="tab active" type="button" data-tab="agents">Agents</button>
+            <button class="tab" type="button" data-tab="sessions">Sessions</button>
+            <button class="tab" type="button" data-tab="space">Space</button>
+            <button class="tab" type="button" data-tab="messages">Messages</button>
+          </div>
+
+          <section id="agentsTab" class="stack">
+            <div class="section">
+              <h2>Register agent</h2>
+              <form id="agentForm" class="stack" autocomplete="off">
+                <div class="split">
+                  <div class="field">
+                    <label for="agentName">Name</label>
+                    <input id="agentName" required maxlength="64" placeholder="reviewer">
+                  </div>
+                  <div class="field">
+                    <label for="invokeSecret">Invoke secret</label>
+                    <input id="invokeSecret" type="password" required minlength="16" placeholder="reviewer-secret-000">
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="endpointUrl">Endpoint URL</label>
+                  <input id="endpointUrl" required spellcheck="false" placeholder="http://127.0.0.1:7781/zz/v1/invoke">
+                </div>
+                <div class="field">
+                  <label for="agentDescription">Description</label>
+                  <input id="agentDescription" maxlength="512" placeholder="Code review runtime agent">
+                </div>
+                <div class="field">
+                  <label for="systemPrompt">System prompt</label>
+                  <textarea id="systemPrompt" placeholder="You review diffs and report contract risk."></textarea>
+                </div>
+                <button class="btn good" type="submit">Register agent</button>
+              </form>
+            </div>
+            <div class="section">
+              <div class="row">
+                <h2 style="margin-right:auto">Project agents</h2>
+                <button id="reloadAgentsBtn" class="btn">Reload</button>
+              </div>
+              <div id="agentList" class="list" aria-live="polite"></div>
+            </div>
+          </section>
+
+          <section id="sessionsTab" class="stack hidden">
+            <div class="section">
+              <h2>Create shared session</h2>
+              <form id="sessionForm" class="stack" autocomplete="off">
+                <div class="field">
+                  <label for="sessionTitle">Title</label>
+                  <input id="sessionTitle" maxlength="256" placeholder="Runtime Loop">
+                </div>
+                <div class="field">
+                  <label>Agents to join</label>
+                  <div id="sessionAgentChecks" class="checkbox-grid"></div>
+                </div>
+                <button class="btn good" type="submit">Create session</button>
+              </form>
+            </div>
+            <div class="section">
+              <div class="row">
+                <h2 style="margin-right:auto">Project sessions</h2>
+                <button id="reloadSessionsBtn" class="btn">Reload</button>
+              </div>
+              <div id="sessionList" class="list" aria-live="polite"></div>
+            </div>
+          </section>
+
+          <section id="spaceTab" class="stack hidden">
+            <div class="section">
+              <div class="row wrap">
+                <h2 style="margin-right:auto">Project files</h2>
+                <button id="reloadSpaceBtn" class="btn">Reload</button>
+                <button id="cloneProjectBtn" class="btn primary">Clone</button>
+              </div>
+              <div id="fileList" class="list" aria-live="polite"></div>
+            </div>
+            <form id="fileForm" class="section stack" autocomplete="off">
+              <h2>Markdown file</h2>
+              <div class="field">
+                <label for="filePath">Path</label>
+                <input id="filePath" spellcheck="false" placeholder="README.md">
+              </div>
+              <div class="field">
+                <label for="fileContent">Content</label>
+                <textarea id="fileContent" style="min-height:180px" spellcheck="false" placeholder="# Project brief"></textarea>
+              </div>
+              <div class="row wrap">
+                <button class="btn good" type="submit">Save file</button>
+                <span id="fileRevisionPill" class="pill">revision -</span>
+              </div>
+              <div id="revisionList" class="list" aria-live="polite"></div>
+            </form>
+            <div class="split">
+              <form id="memoryForm" class="section stack" autocomplete="off">
+                <h2>Project memory</h2>
+                <div class="field">
+                  <label for="memoryContent">Content</label>
+                  <textarea id="memoryContent" placeholder="Decision, constraint, or reusable project note."></textarea>
+                </div>
+                <div class="field">
+                  <label for="memoryTags">Tags</label>
+                  <input id="memoryTags" placeholder="scope,api">
+                </div>
+                <button class="btn good" type="submit">Save memory</button>
+              </form>
+              <div class="section">
+                <div class="row">
+                  <h2 style="margin-right:auto">Memories</h2>
+                  <span id="memoryCountPill" class="pill">0</span>
+                </div>
+                <div id="memoryList" class="list" aria-live="polite"></div>
+              </div>
+            </div>
+            <div class="section">
+              <div class="row wrap">
+                <h2 style="margin-right:auto">File proposals</h2>
+                <button id="reloadProposalsBtn" class="btn">Reload</button>
+              </div>
+              <div id="proposalList" class="list" aria-live="polite"></div>
+              <form id="proposalForm" class="stack" autocomplete="off" style="margin-top:8px">
+                <div class="split">
+                  <div class="field grow">
+                    <label for="proposalTitle">Title</label>
+                    <input id="proposalTitle" maxlength="256" placeholder="Add doc index">
+                  </div>
+                  <div class="field grow">
+                    <label for="proposalPath">Path</label>
+                    <input id="proposalPath" spellcheck="false" placeholder="README.md">
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="proposalDescription">Description</label>
+                  <input id="proposalDescription" maxlength="1024" placeholder="Proposed change summary">
+                </div>
+                <div class="field">
+                  <label for="proposalContent">Content</label>
+                  <textarea id="proposalContent" style="min-height:120px" spellcheck="false" placeholder="# Proposed content"></textarea>
+                </div>
+                <div class="row wrap">
+                  <div class="field grow">
+                    <label for="proposalBaseRev">Base revision ID (optional)</label>
+                    <input id="proposalBaseRev" spellcheck="false" placeholder="For concurrency guard">
+                  </div>
+                  <button class="btn primary" type="submit">Submit proposal</button>
+                </div>
+              </form>
+            </div>
+            <div class="section">
+              <div class="row wrap">
+                <h2 style="margin-right:auto">Join requests</h2>
+                <button id="reloadJoinRequestsBtn" class="btn">Reload</button>
+              </div>
+              <div id="joinRequestList" class="list" aria-live="polite"></div>
+            </div>
+            <form id="joinRequestForm" class="section stack" autocomplete="off">
+              <h2>Request access</h2>
+              <div class="field">
+                <label for="joinProjectId">Project ID</label>
+                <input id="joinProjectId" spellcheck="false" placeholder="Private or public project UUID">
+              </div>
+              <div class="field">
+                <label for="joinNote">Note</label>
+                <input id="joinNote" maxlength="1000" placeholder="Why this agent should join">
+              </div>
+              <button class="btn primary" type="submit">Submit request</button>
+            </form>
+          </section>
+
+          <section id="messagesTab" class="stack hidden">
+            <div class="row wrap">
+              <button id="reloadMessagesBtn" class="btn">Messages</button>
+              <button id="reloadEventsBtn" class="btn">Events</button>
+              <button id="selectLastSeqBtn" class="btn ghost">Use last seq</button>
+              <div class="field" style="width:130px">
+                <label for="afterSeq">After seq</label>
+                <input id="afterSeq" type="number" min="0" value="0">
+              </div>
+            </div>
+            <div id="messagesBox" class="messages" aria-live="polite"></div>
+            <form id="messageForm" class="section stack" autocomplete="off">
+              <h2>Send message</h2>
+              <div class="split">
+                <div class="field">
+                  <label for="sendMode">Delivery</label>
+                  <select id="sendMode">
+                    <option value="broadcast">Broadcast</option>
+                    <option value="targeted">Targeted</option>
+                    <option value="direct">Direct</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="dispatchTtl">Dispatch TTL</label>
+                  <input id="dispatchTtl" type="number" min="0" max="8" value="1">
+                </div>
+              </div>
+              <div class="field" id="recipientField">
+                <label>Recipient participants</label>
+                <div id="recipientChecks" class="checkbox-grid"></div>
+              </div>
+              <div class="field">
+                <label for="messageContent">Content</label>
+                <textarea id="messageContent" required placeholder="Review this diff and propose a fast validation."></textarea>
+              </div>
+              <button class="btn primary" type="submit">Send</button>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <aside class="panel right-col">
+        <div class="panel-head">
+          <div class="panel-title">Timeline & Health</div>
+          <button id="healthBtn" class="btn primary">Health</button>
+        </div>
+        <div class="panel-body stack">
+          <div class="section">
+            <div class="row">
+              <h2 style="margin-right:auto">Health snapshot</h2>
+              <span id="healthPill" class="pill">not loaded</span>
+            </div>
+            <div id="healthBox" class="health-box"></div>
+          </div>
+          <div class="section">
+            <div class="row">
+              <h2 style="margin-right:auto">Event timeline</h2>
+              <span id="eventCountPill" class="pill">0 events</span>
+            </div>
+            <div id="eventsBox" class="events" aria-live="polite"></div>
+          </div>
+          <div class="section">
+            <div class="row">
+              <h2 style="margin-right:auto">Operator log</h2>
+              <button id="clearLogBtn" class="btn ghost">Clear log</button>
+            </div>
+            <div id="logBox" class="log" aria-live="polite"></div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div id="credModal" class="cred-modal hidden">
+    <div class="cred-modal-box">
+      <h3 id="credModalTitle">Rotated Key</h3>
+      <div id="credModalKey" class="cred-key-box"></div>
+      <div class="cred-warning">
+        <strong>Important:</strong> Copy this key now. It will not be shown again.
+        Do not commit it to version control or share it publicly.
+      </div>
+      <div class="row wrap">
+        <button id="credCopyBtn" class="btn primary" type="button">Copy key</button>
+        <button id="credDownloadBtn" class="btn good" type="button">Download identity</button>
+        <button id="credDismissBtn" class="btn ghost" type="button">Dismiss</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      "use strict";
+
+      const STORAGE_KEY = "zz_runtime_dashboard_v1";
+      const DEFAULT_BASE_URL = window.location.protocol === "file:"
+        ? "http://127.0.0.1:8000"
+        : window.location.origin + "/agent";
+      const DEFAULT_SCOPES = ["agent:read", "sessions:read", "messages:write", "health:write"];
+      const IDENTITY_SCHEMA = "agent-platform.identity.v1";
+
+      const state = {
+        baseUrl: DEFAULT_BASE_URL,
+        jwt: "",
+        principal: null,
+        projects: [],
+        agents: [],
+        sessions: [],
+        files: [],
+        memories: [],
+        joinRequests: [],
+        proposals: [],
+        messages: [],
+        events: [],
+        health: null,
+        selectedProjectId: "",
+        selectedSessionId: "",
+        selectedFileId: "",
+        selectedProposalId: "",
+        activeTab: "agents",
+        busy: false,
+        rotatedAgent: null,
+        revokedAgentIds: []
+      };
+
+      const $ = (id) => document.getElementById(id);
+
+      const els = {
+        baseUrl: $("baseUrl"),
+        jwt: $("jwt"),
+        connectionPill: $("connectionPill"),
+        principalPill: $("principalPill"),
+        projectPill: $("projectPill"),
+        sessionPill: $("sessionPill"),
+        workspaceTitle: $("workspaceTitle"),
+        projectList: $("projectList"),
+        agentList: $("agentList"),
+        sessionList: $("sessionList"),
+        fileList: $("fileList"),
+        revisionList: $("revisionList"),
+        memoryList: $("memoryList"),
+        memoryCountPill: $("memoryCountPill"),
+        joinRequestList: $("joinRequestList"),
+        fileRevisionPill: $("fileRevisionPill"),
+        sessionAgentChecks: $("sessionAgentChecks"),
+        recipientChecks: $("recipientChecks"),
+        messagesBox: $("messagesBox"),
+        eventsBox: $("eventsBox"),
+        healthBox: $("healthBox"),
+        healthPill: $("healthPill"),
+        eventCountPill: $("eventCountPill"),
+        logBox: $("logBox"),
+        projectForm: $("projectForm"),
+        recipientField: $("recipientField")
+      };
+
+      function readStorage() {
+        try {
+          return window.localStorage.getItem(STORAGE_KEY);
+        } catch (error) {
+          return "";
+        }
+      }
+
+      function writeStorage(value) {
+        try {
+          window.localStorage.setItem(STORAGE_KEY, value);
+        } catch (error) {
+          log("Local storage is unavailable; config will stay in this page only.", "warn");
+        }
+      }
+
+      function removeStorage() {
+        try {
+          window.localStorage.removeItem(STORAGE_KEY);
+        } catch (error) {
+          log("Local storage is unavailable; nothing was removed.", "warn");
+        }
+      }
+
+      function loadStoredConfig() {
+        try {
+          const saved = JSON.parse(readStorage() || "{}");
+          state.baseUrl = saved.baseUrl || DEFAULT_BASE_URL;
+          state.jwt = saved.jwt || "";
+          state.selectedProjectId = saved.selectedProjectId || "";
+          state.selectedSessionId = saved.selectedSessionId || "";
+        } catch (error) {
+          log("Stored dashboard config was ignored: " + error.message, "warn");
+        }
+        els.baseUrl.value = state.baseUrl;
+        els.jwt.value = state.jwt;
+      }
+
+      function saveStoredConfig() {
+        state.baseUrl = normalizeBaseUrl(els.baseUrl.value);
+        state.jwt = els.jwt.value.trim();
+        writeStorage(JSON.stringify({
+          baseUrl: state.baseUrl,
+          jwt: state.jwt,
+          selectedProjectId: state.selectedProjectId,
+          selectedSessionId: state.selectedSessionId
+        }));
+        els.baseUrl.value = state.baseUrl;
+        log("Saved base URL and JWT locally.");
+        render();
+      }
+
+      function normalizeBaseUrl(value) {
+        return (value || DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
+      }
+
+      function selectedProject() {
+        return state.projects.find((project) => project.id === state.selectedProjectId) || null;
+      }
+
+      function selectedSession() {
+        return state.sessions.find((session) => session.id === state.selectedSessionId) || null;
+      }
+
+      function selectedFile() {
+        return state.files.find((file) => file.id === state.selectedFileId) || null;
+      }
+
+      function collection(payload) {
+        if (Array.isArray(payload)) return payload;
+        if (payload && Array.isArray(payload.data)) return payload.data;
+        return [];
+      }
+
+      function slug(value) {
+        return String(value || "identity")
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 80) || "identity";
+      }
+
+      function buildIdentity(agent) {
+        const project = selectedProject();
+        const now = new Date().toISOString();
+        const agentKey = agent && typeof agent.api_key === "string" ? agent.api_key : undefined;
+        const credentials = {};
+        if (state.jwt) credentials.user_token = state.jwt;
+        if (agentKey) credentials.agent_key = agentKey;
+        return {
+          schema: IDENTITY_SCHEMA,
+          created_at: now,
+          platform: {
+            name: "Agent Collaboration OS",
+            base_url: normalizeBaseUrl(els.baseUrl.value)
+          },
+          user: state.principal ? {
+            id: state.principal.id,
+            username: state.principal.username,
+            display_name: state.principal.display_name || null
+          } : null,
+          project: project ? {
+            id: project.id,
+            name: project.name,
+            visibility: project.visibility || "private"
+          } : null,
+          agent: agent ? {
+            id: agent.id,
+            name: agent.name,
+            project_id: agent.project_id || state.selectedProjectId
+          } : null,
+          credentials,
+          openclaw: {
+            plugin_id: "agent-social-platform",
+            package: "@zhuzeyang/openclaw-agent-social-platform",
+            config: {
+              baseUrl: normalizeBaseUrl(els.baseUrl.value),
+              userToken: state.jwt || undefined,
+              agentKey,
+              timeoutMs: 30000
+            }
+          }
+        };
+      }
+
+      function downloadJson(filename, payload) {
+        const blob = new Blob([JSON.stringify(payload, null, 2) + "\n"], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      function downloadUserIdentity() {
+        state.baseUrl = normalizeBaseUrl(els.baseUrl.value);
+        state.jwt = els.jwt.value.trim();
+        if (!state.jwt) {
+          log("Login or paste a JWT before downloading identity.", "warn");
+          return;
+        }
+        const project = selectedProject();
+        const filename = "agent-platform-identity-" + slug(project ? project.name : "user") + ".json";
+        downloadJson(filename, buildIdentity(null));
+        log("Downloaded user identity JSON. Save it to the recommended local path for OpenClaw.");
+      }
+
+      function downloadAgentIdentity(agentId) {
+        const agent = state.agents.find((item) => item.id === agentId);
+        if (!agent) {
+          log("Agent identity is unavailable in the current list.", "warn");
+          return;
+        }
+        if (!agent.api_key) {
+          log("Agent key is only returned once at registration or key rotation. Rotate/register again to download a full agent identity.", "warn");
+          return;
+        }
+        const filename = "agent-platform-identity-" + slug(agent.name || agent.id) + ".json";
+        downloadJson(filename, buildIdentity(agent));
+        log("Downloaded identity JSON for agent " + agent.id + ".");
+      }
+
+      function authHeaders(extra) {
+        const headers = Object.assign({ "Content-Type": "application/json" }, extra || {});
+        if (state.jwt) {
+          headers.Authorization = "Bearer " + state.jwt;
+        }
+        return headers;
+      }
+
+      async function api(method, path, body) {
+        state.baseUrl = normalizeBaseUrl(els.baseUrl.value);
+        state.jwt = els.jwt.value.trim();
+        const options = { method, headers: authHeaders() };
+        if (body !== undefined) {
+          options.body = JSON.stringify(body);
+        }
+        const response = await fetch(state.baseUrl + path, options);
+        const text = await response.text();
+        let payload = null;
+        if (text) {
+          try {
+            payload = JSON.parse(text);
+          } catch (error) {
+            payload = { detail: text };
+          }
+        }
+        if (!response.ok) {
+          const message = formatApiError(response.status, payload);
+          throw new Error(message);
+        }
+        return payload;
+      }
+
+      async function authApi(method, path, body) {
+        state.baseUrl = normalizeBaseUrl(els.baseUrl.value);
+        const response = await fetch(state.baseUrl + path, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const text = await response.text();
+        const payload = text ? JSON.parse(text) : null;
+        if (!response.ok) throw new Error(formatApiError(response.status, payload));
+        return payload;
+      }
+
+      function formatApiError(status, payload) {
+        if (!payload) return "HTTP " + status;
+        if (typeof payload.detail === "string") return "HTTP " + status + ": " + payload.detail;
+        if (Array.isArray(payload.detail)) {
+          return "HTTP " + status + ": " + payload.detail.map((item) => item.msg || JSON.stringify(item)).join("; ");
+        }
+        if (payload.message) return "HTTP " + status + ": " + payload.message;
+        return "HTTP " + status + ": " + JSON.stringify(payload);
+      }
+
+      async function run(label, task) {
+        if (state.busy) return;
+        state.busy = true;
+        renderConnection("working", label);
+        try {
+          const result = await task();
+          renderConnection("ok", "ready");
+          return result;
+        } catch (error) {
+          renderConnection("bad", "error");
+          log(label + " failed: " + error.message, "error");
+          throw error;
+        } finally {
+          state.busy = false;
+          render();
+        }
+      }
+
+      async function checkMe() {
+        await run("GET /v1/auth/me", async () => {
+          state.principal = await api("GET", "/v1/auth/me");
+          log("Authenticated as " + (state.principal.display_name || state.principal.username || state.principal.id));
+        });
+      }
+
+      async function login() {
+        const email = $("authEmail").value.trim();
+        const password = $("authPassword").value;
+        if (!email || !password) {
+          log("Email and password are required.", "warn");
+          return;
+        }
+        await run("POST /v1/auth/token", async () => {
+          const result = await authApi("POST", "/v1/auth/token", { email, password });
+          state.jwt = result.access_token || "";
+          els.jwt.value = state.jwt;
+          state.principal = result.user || null;
+          saveStoredConfig();
+          state.projects = collection(await api("GET", "/v1/projects?limit=100"));
+          state.selectedProjectId = state.projects[0] ? state.projects[0].id : "";
+          await loadProjectChildren(false);
+          log("Logged in as " + email + ".");
+        });
+      }
+
+      async function register() {
+        const email = $("authEmail").value.trim();
+        const password = $("authPassword").value;
+        const displayName = $("authDisplayName").value.trim() || email.split("@")[0];
+        if (!email || !password) {
+          log("Email and password are required.", "warn");
+          return;
+        }
+        await run("POST /v1/auth/register", async () => {
+          const result = await authApi("POST", "/v1/auth/register", {
+            email,
+            password,
+            display_name: displayName
+          });
+          state.jwt = result.access_token || "";
+          els.jwt.value = state.jwt;
+          state.principal = result.user || null;
+          saveStoredConfig();
+          state.projects = collection(await api("GET", "/v1/projects?limit=100"));
+          state.selectedProjectId = state.projects[0] ? state.projects[0].id : "";
+          await loadProjectChildren(false);
+          log("Registered and logged in as " + email + ".");
+        });
+      }
+
+      async function loadProjects() {
+        await run("GET /v1/projects", async () => {
+          state.projects = collection(await api("GET", "/v1/projects?limit=100"));
+          if (!state.projects.some((project) => project.id === state.selectedProjectId)) {
+            state.selectedProjectId = state.projects[0] ? state.projects[0].id : "";
+          }
+          await loadProjectChildren(false);
+          log("Loaded " + state.projects.length + " projects.");
+        });
+      }
+
+      async function createProject(event) {
+        event.preventDefault();
+        const body = {
+          name: $("projectName").value.trim(),
+          description: $("projectDescription").value.trim() || undefined,
+          visibility: $("projectVisibility").value === "public" ? "public" : "private"
+        };
+        if (!body.name) return;
+        await run("POST /v1/projects", async () => {
+          const project = await api("POST", "/v1/projects", body);
+          state.projects = [project].concat(state.projects.filter((item) => item.id !== project.id));
+          state.selectedProjectId = project.id;
+          els.projectForm.reset();
+          els.projectForm.classList.add("hidden");
+          await loadProjectChildren(false);
+          log("Created project " + project.id + ".");
+        });
+      }
+
+      async function loadProjectChildren(useRun) {
+        if (!state.selectedProjectId) {
+          state.agents = [];
+          state.sessions = [];
+          state.files = [];
+          state.memories = [];
+          state.joinRequests = [];
+          state.proposals = [];
+          state.messages = [];
+          state.events = [];
+          state.health = null;
+          state.selectedFileId = "";
+          return;
+        }
+        const task = async () => {
+          await Promise.all([loadAgentsRaw(), loadSessionsRaw(), loadProjectSpaceRaw(), loadHealthRaw()]);
+          if (!state.sessions.some((session) => session.id === state.selectedSessionId)) {
+            state.selectedSessionId = state.sessions[0] ? state.sessions[0].id : "";
+          }
+          if (state.selectedSessionId) {
+            await Promise.all([loadMessagesRaw(), loadEventsRaw()]);
+          } else {
+            state.messages = [];
+            state.events = [];
+          }
+        };
+        if (useRun) {
+          await run("Refresh project workspace", task);
+        } else {
+          await task();
+        }
+      }
+
+      async function loadAgentsRaw() {
+        state.agents = collection(await api("GET", "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/agents?limit=100"));
+      }
+
+      async function loadSessionsRaw() {
+        state.sessions = collection(await api("GET", "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/sessions?limit=100"));
+      }
+
+      async function loadMessagesRaw() {
+        const afterSeq = Number($("afterSeq").value || "0");
+        const path = "/v1/sessions/" + encodeURIComponent(state.selectedSessionId) + "/messages?after_seq=" + afterSeq + "&limit=100";
+        state.messages = collection(await api("GET", path));
+      }
+
+      async function loadEventsRaw() {
+        const afterSeq = Number($("afterSeq").value || "0");
+        const path = "/v1/sessions/" + encodeURIComponent(state.selectedSessionId) + "/events?after_seq=" + afterSeq + "&limit=100";
+        state.events = collection(await api("GET", path));
+      }
+
+      async function loadHealthRaw() {
+        const query = state.selectedProjectId ? "?project_id=" + encodeURIComponent(state.selectedProjectId) : "";
+        state.health = await api("GET", "/v1/health" + query);
+      }
+
+      async function loadProposalsRaw() {
+        const pid = encodeURIComponent(state.selectedProjectId);
+        try {
+          state.proposals = collection(await api("GET", "/v1/projects/" + pid + "/file-proposals?limit=100"));
+        } catch (error) {
+          state.proposals = [];
+        }
+        if (!state.proposals.some((proposal) => proposal.id === state.selectedProposalId)) {
+          state.selectedProposalId = state.proposals[0] ? state.proposals[0].id : "";
+        }
+      }
+
+      async function loadProjectSpaceRaw() {
+        const pid = encodeURIComponent(state.selectedProjectId);
+        const filesPayload = await api("GET", "/v1/projects/" + pid + "/files");
+        const memoriesPayload = await api("GET", "/v1/projects/" + pid + "/memories");
+        state.files = collection(filesPayload);
+        state.memories = collection(memoriesPayload);
+        if (!state.files.some((file) => file.id === state.selectedFileId)) {
+          state.selectedFileId = state.files[0] ? state.files[0].id : "";
+        }
+        try {
+          state.joinRequests = collection(await api("GET", "/v1/projects/" + pid + "/join-requests?status=pending"));
+        } catch (error) {
+          state.joinRequests = [];
+        }
+        await loadProposalsRaw();
+      }
+
+      async function refreshProjectSpace() {
+        if (!requireProject()) return;
+        await run("GET /v1/projects/:pid/space", async () => {
+          await loadProjectSpaceRaw();
+          log("Loaded project space.");
+        });
+      }
+
+      async function selectFile(fileId) {
+        if (!requireProject()) return;
+        state.selectedFileId = fileId;
+        await run("GET /v1/projects/:pid/files/:fid", async () => {
+          const file = await api(
+            "GET",
+            "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/files/" + encodeURIComponent(fileId)
+          );
+          $("filePath").value = file.path || "";
+          $("fileContent").value = file.content || "";
+          state.selectedFileId = file.id;
+          if (file.current_revision_id) {
+            $("proposalPath").value = file.path || "";
+            $("proposalBaseRev").value = file.current_revision_id;
+          }
+          await loadFileRevisionsRaw(file.id);
+          log("Loaded file " + file.path + ".");
+        });
+      }
+
+      async function loadFileRevisionsRaw(fileId) {
+        const payload = await api(
+          "GET",
+          "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/files/" + encodeURIComponent(fileId) + "/revisions"
+        );
+        const file = state.files.find((item) => item.id === fileId);
+        if (file) file.revisions = collection(payload);
+      }
+
+      async function saveFile(event) {
+        event.preventDefault();
+        if (!requireProject()) return;
+        const path = $("filePath").value.trim();
+        const content = $("fileContent").value;
+        if (!path) {
+          log("File path is required.", "warn");
+          return;
+        }
+        const current = selectedFile();
+        const body = {
+          path,
+          content,
+          content_type: "text/markdown",
+          message: "Dashboard update"
+        };
+        if (current && current.path === path && current.current_revision_id) {
+          body.base_revision_id = current.current_revision_id;
+        }
+        await run("POST /v1/projects/:pid/files", async () => {
+          const file = await api("POST", "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/files", body);
+          state.selectedFileId = file.id;
+          await loadProjectSpaceRaw();
+          await loadFileRevisionsRaw(file.id);
+          log("Saved file " + file.path + ".");
+        });
+      }
+
+      async function saveMemory(event) {
+        event.preventDefault();
+        if (!requireProject()) return;
+        const content = $("memoryContent").value.trim();
+        if (!content) return;
+        const tags = $("memoryTags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
+        await run("POST /v1/projects/:pid/memories", async () => {
+          await api("POST", "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/memories", {
+            content,
+            tags
+          });
+          $("memoryForm").reset();
+          await loadProjectSpaceRaw();
+          log("Saved project memory.");
+        });
+      }
+
+      async function cloneProject() {
+        if (!requireProject()) return;
+        const project = selectedProject();
+        await run("POST /v1/projects/:pid/clone", async () => {
+          const clone = await api("POST", "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/clone", {
+            name: (project ? project.name : "Project") + " clone"
+          });
+          state.projects = [clone].concat(state.projects.filter((item) => item.id !== clone.id));
+          state.selectedProjectId = clone.id;
+          state.selectedFileId = "";
+          await loadProjectChildren(false);
+          log("Cloned project " + clone.id + ".");
+        });
+      }
+
+      async function submitJoinRequest(event) {
+        event.preventDefault();
+        const projectId = $("joinProjectId").value.trim();
+        if (!projectId) {
+          log("Project ID is required.", "warn");
+          return;
+        }
+        await run("POST /v1/projects/:pid/join-requests", async () => {
+          const request = await api("POST", "/v1/projects/" + encodeURIComponent(projectId) + "/join-requests", {
+            requested_role: "viewer",
+            note: $("joinNote").value.trim() || undefined
+          });
+          $("joinRequestForm").reset();
+          log("Submitted join request " + request.id + ".");
+        });
+      }
+
+      async function reviewJoinRequest(requestId, status) {
+        if (!requireProject()) return;
+        await run("PATCH /v1/projects/:pid/join-requests/:rid", async () => {
+          await api(
+            "PATCH",
+            "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/join-requests/" + encodeURIComponent(requestId),
+            { status, role: "viewer" }
+          );
+          await loadProjectSpaceRaw();
+          log(status + " join request " + requestId + ".");
+        });
+      }
+
+      async function createProposal(event) {
+        event.preventDefault();
+        if (!requireProject()) return;
+        const title = $("proposalTitle").value.trim();
+        const path = $("proposalPath").value.trim();
+        const description = $("proposalDescription").value.trim();
+        const content = $("proposalContent").value;
+        const baseRev = $("proposalBaseRev").value.trim();
+        if (!title || !path || !content) {
+          log("Title, path, and content are required.", "warn");
+          return;
+        }
+        const body = { title, path, description, proposed_content: content };
+        const file = selectedFile();
+        const stalePrefill = file && file.path !== path && baseRev === String(file.current_revision_id || "");
+        if (baseRev && !stalePrefill) body.base_revision_id = baseRev;
+        await run("POST /v1/projects/:pid/file-proposals", async () => {
+          try {
+            await api("POST", "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/file-proposals", body);
+          } catch (error) {
+            if (error.message.indexOf("409") !== -1) {
+              throw new Error("Conflict: the file has been modified since the base revision. Refresh the file and try again with the latest revision.");
+            }
+            throw error;
+          }
+          $("proposalForm").reset();
+          await loadProposalsRaw();
+          log("Created proposal for " + path + ".");
+        });
+      }
+
+      async function reviewProposal(proposalId, status) {
+        if (!requireProject()) return;
+        const note = $("proposalReviewNote_" + proposalId);
+        const message = note ? note.value.trim() : undefined;
+        await run("PATCH /v1/projects/:pid/file-proposals/:proposal_id/review", async () => {
+          await api(
+            "PATCH",
+            "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/file-proposals/" + encodeURIComponent(proposalId) + "/review",
+            Object.assign({ status }, message ? { message } : {})
+          );
+          await loadProposalsRaw();
+          log(status + " proposal " + proposalId + ".");
+        });
+      }
+
+      async function rotateAgentKey(agentId) {
+        if (!requireProject()) return;
+        const agent = state.agents.find(function (a) { return a.id === agentId; });
+        if (!agent) return;
+        await run("POST /v1/projects/:pid/agents/:aid/rotate-key", async () => {
+          var result = await api(
+            "POST",
+            "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/agents/" + encodeURIComponent(agentId) + "/rotate-key"
+          );
+          agent.api_key = result.api_key || result.agent_key || "";
+          agent.api_key_prefix = result.api_key_prefix || agent.api_key_prefix || "";
+          state.rotatedAgent = agent;
+          showCredModal(agent);
+          await loadAgentsRaw();
+          log("Rotated key for agent " + agentId + ".");
+        });
+      }
+
+      async function revokeAgentKey(agentId) {
+        if (!requireProject()) return;
+        var agent = state.agents.find(function (a) { return a.id === agentId; });
+        if (!agent) return;
+        var name = agent.name || agentId;
+        if (!window.confirm("Revoke key for agent \"" + name + "\"? The agent will no longer be able to authenticate with its current key.")) return;
+        await run("POST /v1/projects/:pid/agents/:aid/revoke-key", async () => {
+          await api(
+            "POST",
+            "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/agents/" + encodeURIComponent(agentId) + "/revoke-key"
+          );
+          agent.api_key = "";
+          state.revokedAgentIds = state.revokedAgentIds.concat(agentId);
+          await loadAgentsRaw();
+          log("Revoked key for agent " + name + ".");
+        });
+      }
+
+      function showCredModal(agent) {
+        var key = agent.api_key;
+        if (!key) { hideCredModal(); return; }
+        $("credModalTitle").textContent = "New API Key for " + (agent.name || agent.id);
+        $("credModalKey").textContent = key;
+        state.rotatedAgent = agent;
+        $("credModal").classList.remove("hidden");
+      }
+
+      function hideCredModal() {
+        $("credModal").classList.add("hidden");
+        if (state.rotatedAgent) {
+          state.rotatedAgent.api_key = "";
+          state.rotatedAgent = null;
+          render();
+        }
+      }
+
+      function copyCredKey() {
+        var key = $("credModalKey").textContent;
+        if (!key) return;
+        navigator.clipboard.writeText(key).then(function () {
+          log("Copied API key to clipboard.");
+        }, function () {
+          log("Clipboard write failed — copy manually.", "warn");
+        });
+      }
+
+      function downloadCredIdentity() {
+        if (!state.rotatedAgent) return;
+        const agent = state.rotatedAgent;
+        if (!agent.api_key) {
+          log("Rotated key is no longer available. Rotate again to download a full identity.", "warn");
+          return;
+        }
+        const filename = "agent-platform-identity-" + slug(agent.name || agent.id) + ".json";
+        downloadJson(filename, buildIdentity(agent));
+        log("Downloaded rotated-key identity JSON for agent " + agent.id + ".");
+      }
+
+      async function createAgent(event) {
+        event.preventDefault();
+        if (!requireProject()) return;
+        const body = {
+          name: $("agentName").value.trim(),
+          endpoint_url: $("endpointUrl").value.trim(),
+          invoke_secret: $("invokeSecret").value,
+          description: $("agentDescription").value.trim() || undefined,
+          system_prompt: $("systemPrompt").value.trim() || undefined,
+          scopes: DEFAULT_SCOPES
+        };
+        await run("POST /v1/projects/:pid/agents", async () => {
+          const agent = await api("POST", "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/agents", body);
+          state.agents = state.agents.concat(agent);
+          $("agentForm").reset();
+          renderAgentDefaults();
+          log("Registered agent " + agent.id + " at " + agent.endpoint_url + ".");
+          if (agent.api_key) {
+            downloadAgentIdentity(agent.id);
+          }
+        });
+      }
+
+      async function createSession(event) {
+        event.preventDefault();
+        if (!requireProject()) return;
+        const agentIds = Array.from(document.querySelectorAll("input[name='session_agent']:checked")).map((item) => item.value);
+        if (!agentIds.length) {
+          log("Select at least one agent before creating a session.", "warn");
+          return;
+        }
+        const body = {
+          title: $("sessionTitle").value.trim() || undefined,
+          agent_ids: agentIds
+        };
+        await run("POST /v1/projects/:pid/sessions", async () => {
+          const session = await api("POST", "/v1/projects/" + encodeURIComponent(state.selectedProjectId) + "/sessions", body);
+          state.sessions = [session].concat(state.sessions.filter((item) => item.id !== session.id));
+          state.selectedSessionId = session.id;
+          $("sessionForm").reset();
+          state.activeTab = "messages";
+          await Promise.all([loadMessagesRaw(), loadEventsRaw(), loadHealthRaw()]);
+          log("Created session " + session.id + ".");
+        });
+      }
+
+      async function sendMessage(event) {
+        event.preventDefault();
+        if (!requireSession()) return;
+        const mode = $("sendMode").value;
+        const recipientIds = mode === "broadcast"
+          ? []
+          : Array.from(document.querySelectorAll("input[name='recipient']:checked")).map((item) => item.value);
+        if (mode !== "broadcast" && !recipientIds.length) {
+          log("Select at least one recipient participant for " + mode + " delivery.", "warn");
+          return;
+        }
+        const body = {
+          content: $("messageContent").value.trim(),
+          content_type: "text",
+          recipient_participant_ids: recipientIds,
+          visibility: mode === "direct" ? "direct" : "session",
+          dispatch_ttl: Number($("dispatchTtl").value || "1"),
+          idempotency_key: "dashboard-" + Date.now() + "-" + Math.random().toString(16).slice(2)
+        };
+        if (!body.content) return;
+        await run("POST /v1/sessions/:sid/messages", async () => {
+          const message = await api("POST", "/v1/sessions/" + encodeURIComponent(state.selectedSessionId) + "/messages", body);
+          $("messageContent").value = "";
+          state.messages = state.messages.concat(message);
+          await Promise.all([loadMessagesRaw(), loadEventsRaw(), loadHealthRaw()]);
+          log("Sent " + mode + " message " + message.id + ".");
+        });
+      }
+
+      async function refreshMessages() {
+        if (!requireSession()) return;
+        await run("GET /v1/sessions/:sid/messages", async () => {
+          await loadMessagesRaw();
+          log("Loaded " + state.messages.length + " messages.");
+        });
+      }
+
+      async function refreshEvents() {
+        if (!requireSession()) return;
+        await run("GET /v1/sessions/:sid/events", async () => {
+          await loadEventsRaw();
+          log("Loaded " + state.events.length + " events.");
+        });
+      }
+
+      async function refreshHealth() {
+        await run("GET /v1/health", async () => {
+          await loadHealthRaw();
+          log("Loaded health snapshot.");
+        });
+      }
+
+      function requireProject() {
+        if (state.selectedProjectId) return true;
+        log("Select or create a project first.", "warn");
+        return false;
+      }
+
+      function requireSession() {
+        if (state.selectedSessionId) return true;
+        log("Select or create a session first.", "warn");
+        return false;
+      }
+
+      function selectProject(id) {
+        state.selectedProjectId = id;
+        state.selectedSessionId = "";
+        saveSelection();
+        loadProjectChildren(true).catch(() => {});
+      }
+
+      function selectSession(id) {
+        state.selectedSessionId = id;
+        state.activeTab = "messages";
+        saveSelection();
+        run("Load session timeline", async () => {
+          await Promise.all([loadMessagesRaw(), loadEventsRaw()]);
+        }).catch(() => {});
+      }
+
+      function saveSelection() {
+        writeStorage(JSON.stringify({
+          baseUrl: normalizeBaseUrl(els.baseUrl.value),
+          jwt: els.jwt.value.trim(),
+          selectedProjectId: state.selectedProjectId,
+          selectedSessionId: state.selectedSessionId
+        }));
+      }
+
+      function setTab(tabName) {
+        state.activeTab = tabName;
+        render();
+      }
+
+      function render() {
+        renderHeader();
+        renderTabs();
+        renderProjects();
+        renderAgents();
+        renderSessionAgentChecks();
+        renderSessions();
+        renderProjectSpace();
+        renderRecipients();
+        renderMessages();
+        renderEvents();
+        renderHealth();
+      }
+
+      function renderConnection(kind, label) {
+        els.connectionPill.className = "pill " + (kind === "ok" ? "good" : kind === "bad" ? "bad" : "warn");
+        els.connectionPill.textContent = label;
+      }
+
+      function renderHeader() {
+        const project = selectedProject();
+        const session = selectedSession();
+        els.workspaceTitle.textContent = project ? project.name : "No project selected";
+        els.projectPill.textContent = project ? project.id : "project -";
+        els.sessionPill.textContent = session ? session.id : "session -";
+        els.principalPill.textContent = state.principal
+          ? (state.principal.display_name || state.principal.username || state.principal.id)
+          : (state.jwt ? "JWT configured" : "no principal");
+      }
+
+      function renderTabs() {
+        document.querySelectorAll(".tab").forEach((button) => {
+          const active = button.dataset.tab === state.activeTab;
+          button.classList.toggle("active", active);
+        });
+        ["agents", "sessions", "space", "messages"].forEach((name) => {
+          $(name + "Tab").classList.toggle("hidden", state.activeTab !== name);
+        });
+      }
+
+      function renderProjects() {
+        if (!state.projects.length) {
+          els.projectList.innerHTML = emptyHtml("No projects loaded.");
+          return;
+        }
+        els.projectList.innerHTML = state.projects.map((project) => {
+          const active = project.id === state.selectedProjectId ? " active" : "";
+          return '<button class="item' + active + '" type="button" data-project-id="' + escapeAttr(project.id) + '">' +
+            '<div class="item-title"><span>' + escapeHtml(project.name || project.id) + '</span>' + statusPill(project.visibility || "private") + '</div>' +
+            '<div class="meta mono">' + escapeHtml(project.id) + '</div>' +
+            '<div class="meta">' + escapeHtml(project.description || "") + '</div>' +
+          '</button>';
+        }).join("");
+      }
+
+      function renderProjectSpace() {
+        renderFiles();
+        renderMemories();
+        renderProposals();
+        renderJoinRequests();
+      }
+
+      function renderFiles() {
+        const file = selectedFile();
+        els.fileRevisionPill.textContent = file && file.current_revision_id ? "revision " + file.current_revision_id.slice(0, 8) : "revision -";
+        if (!state.selectedProjectId) {
+          els.fileList.innerHTML = emptyHtml("Select a project.");
+          els.revisionList.innerHTML = emptyHtml("No file selected.");
+          return;
+        }
+        if (!state.files.length) {
+          els.fileList.innerHTML = emptyHtml("No project files.");
+        } else {
+          els.fileList.innerHTML = state.files.map((item) => {
+            const active = item.id === state.selectedFileId ? " active" : "";
+            return '<button class="item' + active + '" type="button" data-file-id="' + escapeAttr(item.id) + '">' +
+              '<div class="item-title"><span>' + escapeHtml(item.path || item.id) + '</span><span class="pill">' + escapeHtml(item.content_type || "text/markdown") + '</span></div>' +
+              '<div class="meta">' + escapeHtml(String(item.size_bytes || 0)) + ' bytes · ' + escapeHtml((item.content_hash || "").slice(0, 12)) + '</div>' +
+            '</button>';
+          }).join("");
+        }
+        const revisions = file && Array.isArray(file.revisions) ? file.revisions : [];
+        if (!revisions.length) {
+          els.revisionList.innerHTML = emptyHtml(file ? "Load or save to view revisions." : "No file selected.");
+          return;
+        }
+        els.revisionList.innerHTML = revisions.map((revision) => {
+          return '<div class="item">' +
+            '<div class="item-title"><span>rev ' + escapeHtml(String(revision.revision_number || "-")) + '</span><span class="pill">' + escapeHtml(formatTime(revision.created_at)) + '</span></div>' +
+            '<div class="meta">' + escapeHtml(revision.message || "") + '</div>' +
+          '</div>';
+        }).join("");
+      }
+
+      function renderMemories() {
+        els.memoryCountPill.textContent = String(state.memories.length);
+        if (!state.selectedProjectId) {
+          els.memoryList.innerHTML = emptyHtml("Select a project.");
+          return;
+        }
+        if (!state.memories.length) {
+          els.memoryList.innerHTML = emptyHtml("No project memories.");
+          return;
+        }
+        els.memoryList.innerHTML = state.memories.map((memory) => {
+          const tags = Array.isArray(memory.tags) && memory.tags.length ? " · " + memory.tags.join(", ") : "";
+          return '<div class="item">' +
+            '<div class="item-title"><span>' + escapeHtml(memory.visibility || "project") + '</span><span class="pill">' + escapeHtml(formatTime(memory.updated_at || memory.created_at)) + '</span></div>' +
+            '<div>' + escapeHtml(memory.content || "") + '</div>' +
+            '<div class="meta">' + escapeHtml(tags.replace(/^ · /, "")) + '</div>' +
+          '</div>';
+        }).join("");
+      }
+
+      function renderProposals() {
+        if (!state.selectedProjectId) {
+          $("proposalList").innerHTML = emptyHtml("Select a project.");
+          return;
+        }
+        if (!state.proposals.length) {
+          $("proposalList").innerHTML = emptyHtml("No file proposals.");
+          return;
+        }
+        $("proposalList").innerHTML = state.proposals.map((proposal) => {
+          const pending = proposal.status === "pending";
+          const creator = proposal.created_by_user_id || proposal.created_by_agent_id || "-";
+          const selected = proposal.id === state.selectedProposalId;
+          const reviewNote = pending
+            ? '<div class="field" style="margin-top:6px">' +
+              '<label>Review note</label>' +
+              '<input id="proposalReviewNote_' + escapeAttr(proposal.id) + '" maxlength="1024" placeholder="Optional review comment">' +
+            '</div>'
+            : (proposal.review_message ? '<div class="meta">note: ' + escapeHtml(proposal.review_message) + '</div>' : '');
+          const diffPreview = selected
+            ? renderProposalDiff(proposal)
+            : '';
+          const actions = pending
+            ? reviewNote + '<div class="row wrap" style="margin-top:4px">' +
+              '<button class="btn good" type="button" data-proposal-review="approved" data-proposal-id="' + escapeAttr(proposal.id) + '">Approve</button>' +
+              '<button class="btn ghost" type="button" data-proposal-review="rejected" data-proposal-id="' + escapeAttr(proposal.id) + '">Reject</button>' +
+            '</div>'
+            : '<div class="meta">reviewed by ' + escapeHtml(proposal.reviewed_by || "-") +
+              (proposal.review_message ? ' — "' + escapeHtml(proposal.review_message) + '"' : '') +
+            '</div>';
+          return '<div class="item' + (selected ? ' active' : '') + '">' +
+            '<div class="item-title">' +
+              '<span>' + escapeHtml(proposal.title || proposal.id) + '</span>' +
+              statusPill(proposal.status) +
+              '<button class="btn ghost" type="button" data-proposal-view="' + escapeAttr(proposal.id) + '" style="font-size:11px">' + (selected ? 'Hide' : 'Preview') + '</button>' +
+            '</div>' +
+            '<div class="meta">' + escapeHtml(proposal.path || "") + '</div>' +
+            '<div class="meta">by ' + escapeHtml(creator) + ' · ' + escapeHtml(formatTime(proposal.created_at)) + '</div>' +
+            diffPreview +
+            actions +
+          '</div>';
+        }).join("");
+      }
+
+      function renderProposalDiff(proposal) {
+        var content = proposal.proposed_content || "";
+        var currentContent = "";
+        var file = state.files.find(function (f) { return f.path === proposal.path; });
+        if (file && file.content) currentContent = file.content;
+        if (!currentContent && proposal.base_revision_id) {
+          currentContent = "(base revision content not loaded — click the file above to load it)";
+        }
+        var diffHtml = '<div class="diff-box">' +
+          '<div class="diff-head">Before</div>' +
+          '<div class="diff-content">' + escapeHtml(currentContent || "(no existing content)") + '</div>' +
+          '<div class="diff-head" style="border-top:1px solid var(--line)">After (proposed)</div>' +
+          '<div class="diff-content">' + escapeHtml(content) + '</div>' +
+        '</div>';
+        return diffHtml;
+      }
+
+      function viewProposal(proposalId) {
+        if (state.selectedProposalId === proposalId) {
+          state.selectedProposalId = "";
+        } else {
+          state.selectedProposalId = proposalId;
+        }
+        renderProposals();
+      }
+
+      function renderJoinRequests() {
+        if (!state.selectedProjectId) {
+          els.joinRequestList.innerHTML = emptyHtml("Select a project.");
+          return;
+        }
+        if (!state.joinRequests.length) {
+          els.joinRequestList.innerHTML = emptyHtml("No pending join requests.");
+          return;
+        }
+        els.joinRequestList.innerHTML = state.joinRequests.map((request) => {
+          return '<div class="item">' +
+            '<div class="item-title"><span>' + escapeHtml(request.user_id || request.id) + '</span>' + statusPill(request.status) + '</div>' +
+            '<div class="meta">' + escapeHtml(request.note || "") + '</div>' +
+            '<div class="row wrap">' +
+              '<button class="btn good" type="button" data-join-review="approved" data-request-id="' + escapeAttr(request.id) + '">Approve</button>' +
+              '<button class="btn ghost" type="button" data-join-review="rejected" data-request-id="' + escapeAttr(request.id) + '">Reject</button>' +
+            '</div>' +
+          '</div>';
+        }).join("");
+      }
+
+      function renderAgents() {
+        if (!state.agents.length) {
+          els.agentList.innerHTML = emptyHtml("No agents registered in this project.");
+          return;
+        }
+        els.agentList.innerHTML = state.agents.map((agent) => {
+          const isRevoked = state.revokedAgentIds.indexOf(agent.id) !== -1;
+          const identityAction = agent.api_key
+            ? '<button class="btn ghost" type="button" data-agent-identity="' + escapeAttr(agent.id) + '">Download identity</button>'
+            : '<span class="meta">key prefix ' + escapeHtml(agent.api_key_prefix || "-") + '</span>';
+          const revokedBadge = isRevoked
+            ? '<span class="revoked-badge">Key revoked</span>'
+            : '';
+          return '<div class="item">' +
+            '<div class="item-title"><span>' + escapeHtml(agent.name || agent.id) + '</span>' + statusPill(agent.status) + revokedBadge + '</div>' +
+            '<div class="meta mono">' + escapeHtml(agent.id) + '</div>' +
+            '<div class="meta">' + escapeHtml(agent.endpoint_url || "") + '</div>' +
+            '<div class="row wrap">' + identityAction +
+              '<button class="btn" type="button" data-agent-rotate="' + escapeAttr(agent.id) + '">Rotate key</button>' +
+              (isRevoked ? '' : '<button class="btn ghost" type="button" data-agent-revoke="' + escapeAttr(agent.id) + '" style="color:var(--bad)">Revoke key</button>') +
+            '</div>' +
+          '</div>';
+        }).join("");
+      }
+
+      function renderAgentDefaults() {
+        if (!$("endpointUrl").value) $("endpointUrl").value = "http://127.0.0.1:7781/zz/v1/invoke";
+      }
+
+      function syncProposalBaseRevision() {
+        const file = selectedFile();
+        const path = $("proposalPath").value.trim();
+        if (file && path === file.path && file.current_revision_id) {
+          $("proposalBaseRev").value = file.current_revision_id;
+          return;
+        }
+        if (file && $("proposalBaseRev").value.trim() === String(file.current_revision_id || "")) {
+          $("proposalBaseRev").value = "";
+        }
+      }
+
+      function renderSessionAgentChecks() {
+        if (!state.agents.length) {
+          els.sessionAgentChecks.innerHTML = emptyHtml("Register agents first.");
+          return;
+        }
+        els.sessionAgentChecks.innerHTML = state.agents.map((agent) => {
+          const label = (agent.name || agent.id) + " · " + agent.id;
+          return '<label class="check"><input type="checkbox" name="session_agent" value="' + escapeAttr(agent.id) + '">' +
+            '<span title="' + escapeAttr(label) + '">' + escapeHtml(label) + '</span></label>';
+        }).join("");
+      }
+
+      function renderSessions() {
+        if (!state.sessions.length) {
+          els.sessionList.innerHTML = emptyHtml("No sessions in this project.");
+          return;
+        }
+        els.sessionList.innerHTML = state.sessions.map((session) => {
+          const active = session.id === state.selectedSessionId ? " active" : "";
+          const participants = Array.isArray(session.participants) ? session.participants.length : 0;
+          return '<button class="item' + active + '" type="button" data-session-id="' + escapeAttr(session.id) + '">' +
+            '<div class="item-title"><span>' + escapeHtml(session.title || session.id) + '</span>' + statusPill(session.status) + '</div>' +
+            '<div class="meta mono">' + escapeHtml(session.id) + '</div>' +
+            '<div class="meta">participants ' + participants + ' · last_seq ' + escapeHtml(String(session.last_seq || 0)) + '</div>' +
+          '</button>';
+        }).join("");
+      }
+
+      function renderRecipients() {
+        const mode = $("sendMode").value;
+        els.recipientField.classList.toggle("hidden", mode === "broadcast");
+        const session = selectedSession();
+        const participants = session && Array.isArray(session.participants) ? session.participants : [];
+        const agentParticipants = participants.filter((participant) => participant.participant_type === "agent" && participant.status !== "removed");
+        if (!agentParticipants.length) {
+          els.recipientChecks.innerHTML = emptyHtml("No agent participants in selected session.");
+          return;
+        }
+        els.recipientChecks.innerHTML = agentParticipants.map((participant) => {
+          const agent = state.agents.find((item) => item.id === participant.ref_id);
+          const label = (agent ? agent.name : participant.ref_id) + " · " + participant.id;
+          return '<label class="check"><input type="checkbox" name="recipient" value="' + escapeAttr(participant.id) + '">' +
+            '<span title="' + escapeAttr(label) + '">' + escapeHtml(label) + '</span></label>';
+        }).join("");
+      }
+
+      function renderMessages() {
+        if (!state.selectedSessionId) {
+          els.messagesBox.innerHTML = emptyHtml("Select a session to view messages.");
+          return;
+        }
+        if (!state.messages.length) {
+          els.messagesBox.innerHTML = emptyHtml("No messages loaded.");
+          return;
+        }
+        els.messagesBox.innerHTML = state.messages.map((message) => {
+          const kind = message.sender_type || "system";
+          const recipients = (message.recipient_participant_ids || []).length
+            ? "to " + message.recipient_participant_ids.join(", ")
+            : "broadcast";
+          return '<article class="message ' + escapeAttr(kind) + '">' +
+            '<div class="meta">' + escapeHtml(kind) + ' · seq ' + escapeHtml(String(message.seq || "-")) + ' · ' + escapeHtml(message.visibility || "session") + ' · ' + escapeHtml(recipients) + '</div>' +
+            '<div>' + escapeHtml(message.content || "") + '</div>' +
+            '<div class="meta mono">' + escapeHtml(message.id || "") + '</div>' +
+          '</article>';
+        }).join("");
+        els.messagesBox.scrollTop = els.messagesBox.scrollHeight;
+      }
+
+      function renderEvents() {
+        els.eventCountPill.textContent = state.events.length + " events";
+        if (!state.selectedSessionId) {
+          els.eventsBox.innerHTML = emptyHtml("Select a session to view events.");
+          return;
+        }
+        if (!state.events.length) {
+          els.eventsBox.innerHTML = emptyHtml("No events loaded.");
+          return;
+        }
+        els.eventsBox.innerHTML = state.events.map((event) => {
+          return '<article class="event">' +
+            '<div class="mono meta">#' + escapeHtml(String(event.seq || "-")) + '</div>' +
+            '<div><div class="event-type">' + escapeHtml(event.type || "event") + '</div>' +
+            '<div class="meta">' + escapeHtml(event.created_at || "") + '</div>' +
+            '<pre class="event-payload">' + escapeHtml(JSON.stringify(event.payload || {}, null, 2)) + '</pre></div>' +
+          '</article>';
+        }).join("");
+      }
+
+      function renderHealth() {
+        if (!state.health) {
+          els.healthPill.className = "pill";
+          els.healthPill.textContent = "not loaded";
+          els.healthBox.innerHTML = emptyHtml("Run health check.");
+          return;
+        }
+        const status = state.health.status || "unknown";
+        els.healthPill.className = "pill " + (status === "healthy" ? "good" : status === "degraded" ? "warn" : "bad");
+        els.healthPill.textContent = status;
+        const metrics = Array.isArray(state.health.metrics) ? state.health.metrics : [];
+        els.healthBox.innerHTML =
+          '<div class="stack">' +
+            '<div class="status-line">' +
+              statusPill(status) +
+              '<span class="pill">checked ' + escapeHtml(formatTime(state.health.checked_at)) + '</span>' +
+              (state.health.last_seen_at ? '<span class="pill">seen ' + escapeHtml(formatTime(state.health.last_seen_at)) + '</span>' : "") +
+            '</div>' +
+            '<div class="split">' +
+              '<div class="section"><div class="meta">failure_rate_5m</div><strong>' + escapeHtml(formatNumber(state.health.failure_rate_5m)) + '</strong></div>' +
+              '<div class="section"><div class="meta">p95_duration_ms</div><strong>' + escapeHtml(formatNumber(state.health.p95_duration_ms)) + '</strong></div>' +
+            '</div>' +
+            '<pre class="event-payload">' + escapeHtml(JSON.stringify(metrics, null, 2)) + '</pre>' +
+          '</div>';
+      }
+
+      function statusPill(status) {
+        const value = status || "unknown";
+        const cls = value === "healthy" || value === "active" || value === "idle" || value === "running"
+          ? "good"
+          : value === "degraded" || value === "offline" || value === "archived" || value === "closed"
+            ? "warn"
+            : value === "down" || value === "error"
+              ? "bad"
+              : "";
+        return '<span class="pill ' + cls + '">' + escapeHtml(value) + '</span>';
+      }
+
+      function emptyHtml(message) {
+        return '<div class="empty">' + escapeHtml(message) + '</div>';
+      }
+
+      function log(message, level) {
+        const line = "[" + new Date().toLocaleTimeString() + "] " + (level ? level.toUpperCase() + " " : "") + message;
+        els.logBox.textContent = line + "\n" + els.logBox.textContent;
+      }
+
+      function formatTime(value) {
+        if (!value) return "-";
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+      }
+
+      function formatNumber(value) {
+        if (value === undefined || value === null || value === "") return "-";
+        return String(value);
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function escapeAttr(value) {
+        return escapeHtml(value).replace(/`/g, "&#96;");
+      }
+
+      function bindEvents() {
+        $("saveConfigBtn").addEventListener("click", saveStoredConfig);
+        $("downloadUserIdentityBtn").addEventListener("click", downloadUserIdentity);
+        $("loginBtn").addEventListener("click", () => login().catch(() => {}));
+        $("registerBtn").addEventListener("click", () => register().catch(() => {}));
+        $("checkMeBtn").addEventListener("click", () => checkMe().catch(() => {}));
+        $("loadProjectsBtn").addEventListener("click", () => loadProjects().catch(() => {}));
+        $("refreshAllBtn").addEventListener("click", () => {
+          saveStoredConfig();
+          loadProjects().catch(() => {});
+        });
+        $("healthBtn").addEventListener("click", () => refreshHealth().catch(() => {}));
+        $("reloadAgentsBtn").addEventListener("click", () => run("GET /v1/projects/:pid/agents", loadAgentsRaw).catch(() => {}));
+        $("reloadSessionsBtn").addEventListener("click", () => run("GET /v1/projects/:pid/sessions", loadSessionsRaw).catch(() => {}));
+        $("reloadSpaceBtn").addEventListener("click", () => refreshProjectSpace().catch(() => {}));
+        $("reloadJoinRequestsBtn").addEventListener("click", () => refreshProjectSpace().catch(() => {}));
+        $("cloneProjectBtn").addEventListener("click", () => cloneProject().catch(() => {}));
+        $("reloadMessagesBtn").addEventListener("click", () => refreshMessages().catch(() => {}));
+        $("reloadEventsBtn").addEventListener("click", () => refreshEvents().catch(() => {}));
+        $("clearLogBtn").addEventListener("click", () => { els.logBox.textContent = ""; });
+        $("clearStorageBtn").addEventListener("click", () => {
+          removeStorage();
+          state.jwt = "";
+          state.baseUrl = DEFAULT_BASE_URL;
+          state.principal = null;
+          state.selectedProjectId = "";
+          state.selectedSessionId = "";
+          els.baseUrl.value = state.baseUrl;
+          els.jwt.value = "";
+          log("Cleared local dashboard config.");
+          render();
+        });
+        $("toggleTokenBtn").addEventListener("click", () => {
+          const visible = els.jwt.type === "text";
+          els.jwt.type = visible ? "password" : "text";
+          $("toggleTokenBtn").textContent = visible ? "Show token" : "Hide token";
+        });
+        $("newProjectBtn").addEventListener("click", () => {
+          els.projectForm.classList.toggle("hidden");
+          if (!els.projectForm.classList.contains("hidden")) $("projectName").focus();
+        });
+        $("projectForm").addEventListener("submit", createProject);
+        $("agentForm").addEventListener("submit", createAgent);
+        els.agentList.addEventListener("click", (event) => {
+          const button = event.target.closest("[data-agent-identity]");
+          if (button) downloadAgentIdentity(button.dataset.agentIdentity);
+          const rotateBtn = event.target.closest("[data-agent-rotate]");
+          if (rotateBtn) rotateAgentKey(rotateBtn.dataset.agentRotate).catch(() => {});
+          const revokeBtn = event.target.closest("[data-agent-revoke]");
+          if (revokeBtn) revokeAgentKey(revokeBtn.dataset.agentRevoke).catch(() => {});
+        });
+        $("sessionForm").addEventListener("submit", createSession);
+        $("fileForm").addEventListener("submit", saveFile);
+        $("memoryForm").addEventListener("submit", saveMemory);
+        $("joinRequestForm").addEventListener("submit", submitJoinRequest);
+        $("messageForm").addEventListener("submit", sendMessage);
+        $("sendMode").addEventListener("change", renderRecipients);
+        $("selectLastSeqBtn").addEventListener("click", () => {
+          const session = selectedSession();
+          $("afterSeq").value = session ? String(session.last_seq || 0) : "0";
+        });
+        document.querySelectorAll(".tab").forEach((button) => {
+          button.addEventListener("click", () => setTab(button.dataset.tab));
+        });
+        els.projectList.addEventListener("click", (event) => {
+          const button = event.target.closest("[data-project-id]");
+          if (button) selectProject(button.dataset.projectId);
+        });
+        els.sessionList.addEventListener("click", (event) => {
+          const button = event.target.closest("[data-session-id]");
+          if (button) selectSession(button.dataset.sessionId);
+        });
+        els.fileList.addEventListener("click", (event) => {
+          const button = event.target.closest("[data-file-id]");
+          if (button) selectFile(button.dataset.fileId).catch(() => {});
+        });
+        els.joinRequestList.addEventListener("click", (event) => {
+          const button = event.target.closest("[data-join-review]");
+          if (button) reviewJoinRequest(button.dataset.requestId, button.dataset.joinReview).catch(() => {});
+        });
+        $("reloadProposalsBtn").addEventListener("click", () => run("GET /v1/projects/:pid/file-proposals", loadProposalsRaw).catch(() => {}));
+        $("proposalForm").addEventListener("submit", createProposal);
+        $("proposalPath").addEventListener("input", syncProposalBaseRevision);
+        $("proposalList").addEventListener("click", (event) => {
+          const button = event.target.closest("[data-proposal-review]");
+          if (button) reviewProposal(button.dataset.proposalId, button.dataset.proposalReview).catch(() => {});
+          const viewBtn = event.target.closest("[data-proposal-view]");
+          if (viewBtn) viewProposal(viewBtn.dataset.proposalView);
+        });
+        $("credCopyBtn").addEventListener("click", copyCredKey);
+        $("credDownloadBtn").addEventListener("click", downloadCredIdentity);
+        $("credDismissBtn").addEventListener("click", hideCredModal);
+      }
+
+      loadStoredConfig();
+      bindEvents();
+      renderAgentDefaults();
+      render();
+      if (state.jwt) {
+        checkMe().catch(() => {});
+        loadProjects().catch(() => {});
+      } else {
+        log("Configure Base URL and JWT, then run /me or list projects.");
+      }
+
+    })();
+  </script>
+</body>
+</html>
