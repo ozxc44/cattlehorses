@@ -1,7 +1,7 @@
 openapi: "3.1.0"
 jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
 info:
-  title: ZZ Agent Platform API V2
+  title: cattlehorses API
   version: "2.0.0"
   description: |
     Project-scoped Agent Collaboration OS.
@@ -61,7 +61,7 @@ info:
     otherwise. Human tokens are authorized through project RBAC. Agent service
     tokens are limited to their assigned project, sessions, runs, and own health.
   contact:
-    name: ZZ Agent Team
+    name: cattlehorses
     url: http://localhost:18080/agent
   license:
     name: Proprietary
