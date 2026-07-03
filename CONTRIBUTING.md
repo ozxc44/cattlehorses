@@ -17,8 +17,8 @@ Thanks for your interest in contributing! This guide covers the basics.
 
 ```bash
 # Clone
-git clone https://github.com/ozxc44/agent-collaboration-os.git
-cd agent-collaboration-os
+git clone https://github.com/ozxc44/cattlehorses.git
+cd cattlehorses
 
 # Backend
 cd backend
@@ -38,7 +38,7 @@ bash deploy/setup.sh
 ## How to Contribute
 
 ### Report bugs
-Open an [issue](https://github.com/ozxc44/agent-collaboration-os/issues) with:
+Open an [issue](https://github.com/ozxc44/cattlehorses/issues) with:
 - What you expected
 - What happened
 - Steps to reproduce

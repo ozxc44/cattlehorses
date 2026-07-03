@@ -38,7 +38,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-BASE_URL = os.environ.get("BASE_URL", "https://www.zhuzeyang.xyz/agent")
+BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:18080/agent")
 API_URL = BASE_URL.rstrip("/") + "/v1"
 TS = datetime.now().astimezone().strftime("%Y%m%dT%H%M%SZ")
 TEST_EMAIL = f"onboard-smoke-{TS}@example.com"

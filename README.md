@@ -28,7 +28,7 @@
 ### 1. 部署平台（Docker Compose）
 
 ```bash
-git clone <repo-url> && cd agent-collaboration-os
+git clone https://github.com/ozxc44/cattlehorses.git && cd cattlehorses
 cd deploy/nas
 # 编辑 .env (数据库/JWT 密钥/Gitea 配置)
 cp .env.example .env

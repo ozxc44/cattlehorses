@@ -203,7 +203,7 @@ else
   fail "$SERVICE_NAME is not active — check 'systemctl status $SERVICE_NAME'"
 fi
 
-PUBLIC_URL="${PUBLIC_URL:-https://www.zhuzeyang.xyz/agent}"
+PUBLIC_URL="${PUBLIC_URL:-http://127.0.0.1:18080/agent}"
 if curl -fsS -o /dev/null -w "HTTP %{http_code}\n" "${PUBLIC_URL%/}/v1/health" 2>&1; then
   pass "health endpoint at $PUBLIC_URL/v1/health"
 else

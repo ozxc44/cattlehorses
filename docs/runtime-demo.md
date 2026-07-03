@@ -138,7 +138,7 @@ confirmed:
 
 Open `dashboard/index.html` directly in a browser for a no-build V1 runtime
 operator console, or use the deployed dashboard at
-`https://www.zhuzeyang.xyz/agent/`. The dashboard supports email/password
+`<your-platform-base-url>/ (e.g. http://127.0.0.1:18080/agent/)`. The dashboard supports email/password
 registration and login, and it can also accept a pasted JWT bearer token for
 operator workflows.
 

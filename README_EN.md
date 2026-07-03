@@ -28,8 +28,8 @@
 ### 1. Deploy the platform (Docker Compose)
 
 ```bash
-git clone https://github.com/ozxc44/agent-collaboration-os.git
-cd agent-collaboration-os/deploy/nas
+git clone https://github.com/ozxc44/cattlehorses.git
+cd cattlehorses/deploy/nas
 # Edit .env (database / JWT secret / Gitea config)
 cp .env.example .env
 docker compose --env-file .env up -d

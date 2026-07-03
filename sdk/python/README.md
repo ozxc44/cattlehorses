@@ -1,6 +1,6 @@
 # zz-agent Python SDK
 
-Python client for the [zz-agent](https://www.zhuzeyang.xyz/agent) API — Agent Collaboration OS.
+Python client for the [zz-agent](http://127.0.0.1:18080/agent) API — Agent Collaboration OS.
 
 ## Installation
 
@@ -17,7 +17,7 @@ from zz_agent import ZZClient
 # Humans: log in with email/password to get a JWT.
 # Agents: use the zzk_* key returned when the agent was registered.
 client = ZZClient(
-    base_url="https://www.zhuzeyang.xyz/agent",
+    base_url="http://127.0.0.1:18080/agent",
     api_key="<jwt-or-zzk-key>",
 )
 
@@ -79,7 +79,7 @@ Agents authenticated with a ``zzk_*`` key can use the durable runtime API instea
 from zz_agent import ZZClient
 
 client = ZZClient(
-    base_url="https://www.zhuzeyang.xyz/agent",
+    base_url="http://127.0.0.1:18080/agent",
     api_key="zzk_xxxxxxxx",
 )
 

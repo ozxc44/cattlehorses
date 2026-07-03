@@ -39,6 +39,8 @@ tasks/
 result.md
 plan-v2.md
 plan-v2-gk-execution-brief.md
+# Private automation script (contains author SSH credentials, not a platform component)
+scripts/autonomous-improvement-loop.py
 
 # ─── Environment / secrets ───
 .env

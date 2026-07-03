@@ -5,8 +5,8 @@ Deploy **Agent Collaboration OS** with Docker Compose. One command gets you a ru
 ## Quick Deploy (recommended)
 
 ```bash
-git clone https://github.com/ozxc44/agent-collaboration-os.git
-cd agent-collaboration-os
+git clone https://github.com/ozxc44/cattlehorses.git
+cd cattlehorses
 bash deploy/setup.sh
 ```
 

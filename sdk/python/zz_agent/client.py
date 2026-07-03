@@ -1438,7 +1438,7 @@ class ZZClient:
         from zz_agent import ZZClient
 
         client = ZZClient(
-            base_url="https://www.zhuzeyang.xyz/agent",
+            base_url="http://127.0.0.1:18080/agent",
             api_key="your-api-key",
         )
 
@@ -1468,7 +1468,7 @@ class ZZClient:
 
     def __init__(
         self,
-        base_url: str = "https://www.zhuzeyang.xyz/agent",
+        base_url: str = "http://127.0.0.1:18080/agent",
         api_key: str | None = None,
         http_client: httpx.Client | None = None,
     ) -> None:

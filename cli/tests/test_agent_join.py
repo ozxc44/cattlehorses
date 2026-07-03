@@ -244,9 +244,9 @@ def test_parse_invite_extracts_role_and_base_url() -> None:
 def test_parse_invite_maps_dashboard_host_to_api_base() -> None:
     """The deterministic mapping from invite host to API base is documented in tests."""
     _, _, _, base = zz_main._parse_invite(
-        "https://www.zhuzeyang.xyz/agent-start.html?project_id=p1"
+        "http://127.0.0.1:18080/agent-start.html?project_id=p1"
     )
-    assert base == "https://www.zhuzeyang.xyz/agent"
+    assert base == "http://127.0.0.1:18080/agent"
     _, _, _, base2 = zz_main._parse_invite(
         "http://localhost:8080/agent-start.html?project_id=p1"
     )

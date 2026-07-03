@@ -1,6 +1,6 @@
 # zz-cli
 
-CLI tool for [zhuzeyang-agent](https://www.zhuzeyang.xyz/agent) — The Agent Collaboration OS.
+CLI tool for [zhuzeyang-agent](http://127.0.0.1:18080/agent) — The Agent Collaboration OS.
 
 ## Install
 
@@ -94,7 +94,7 @@ Credentials are stored in `~/.zz/config.json`:
 {
     "access_token": "eyJ...",
     "api_key": "eyJ...",
-    "base_url": "https://www.zhuzeyang.xyz/agent"
+    "base_url": "http://127.0.0.1:18080/agent"
 }
 ```
 

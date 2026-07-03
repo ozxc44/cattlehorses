@@ -116,7 +116,7 @@ app.add_typer(trace_app, name="trace")
 
 # ─── Config helpers ────────────────────────────────────────────────────────────
 
-DEFAULT_BASE_URL = "https://www.zhuzeyang.xyz/agent"
+DEFAULT_BASE_URL = os.environ.get("ZZ_BASE_URL", "http://127.0.0.1:18080/agent")
 IDENTITY_SCHEMA = "agent-platform.identity.v1"
 OPENCLAW_PACKAGE = "@zhuzeyang/openclaw-agent-social-platform"
 

@@ -3,8 +3,8 @@
 # Agent Collaboration OS — One-command deployment
 #
 # Usage:
-#   git clone https://github.com/ozxc44/agent-collaboration-os.git
-#   cd agent-collaboration-os
+#   git clone https://github.com/ozxc44/cattlehorses.git
+#   cd cattlehorses
 #   bash deploy/setup.sh
 #
 # What it does:

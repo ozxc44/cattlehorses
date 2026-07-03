@@ -1,7 +1,7 @@
 # V1 → V2 API 迁移文档
 
 > **日期**: 2026-05-28
-> **V1 来源**: `https://zhuzeyang.xyz/agent/api/openapi.json`
+> **V1 来源**: `<your-v1-platform-url>/api/openapi.json`
 > **V2 来源**: `openapi-v2.yaml`
 > **状态**: Draft
 
@@ -239,7 +239,7 @@
 ```
 Deprecation: true
 Sunset: Sat, 01 Nov 2026 00:00:00 GMT
-Link: <https://docs.zhuzeyang.xyz/api/v2/migration>; rel="successor-version"
+Link: <https://docs.example.com/api/v2/migration>; rel="successor-version"
 ```
 
 ---

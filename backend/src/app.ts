@@ -43,8 +43,8 @@ function allowedOrigins(): string[] {
     return configured.split(',').map((origin) => origin.trim()).filter(Boolean);
   }
   return [
-    'https://www.zhuzeyang.xyz',
-    'https://zhuzeyang.xyz',
+    'http://127.0.0.1:18080',
+    'http://localhost:18080',
     'http://127.0.0.1:3000',
     'http://localhost:3000',
     'http://127.0.0.1:8000',

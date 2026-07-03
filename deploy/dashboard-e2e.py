@@ -15,7 +15,7 @@ Exercises the single-file SPA dashboard in a real browser:
 
 Usage:
   python3 deploy/dashboard-e2e.py                            # default BASE_URL
-  BASE_URL=https://www.zhuzeyang.xyz/agent python3 deploy/dashboard-e2e.py
+  BASE_URL=http://127.0.0.1:18080/agent python3 deploy/dashboard-e2e.py
   python3 deploy/dashboard-e2e.py --headless                 # no visible browser
   python3 deploy/dashboard-e2e.py --artifacts-dir ./e2e-artifacts
 
@@ -41,7 +41,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-BASE_URL = os.environ.get("BASE_URL", "https://www.zhuzeyang.xyz/agent")
+BASE_URL = os.environ.get("BASE_URL", "http://127.0.0.1:18080/agent")
 DASHBOARD_URL = BASE_URL.rstrip("/") + "/"
 API_URL = BASE_URL.rstrip("/") + "/v1"
 TS = datetime.now().astimezone().strftime("%Y%m%dT%H%M%SZ")
