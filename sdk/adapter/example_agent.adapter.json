@@ -1,0 +1,6 @@
+{
+  "name": "shell-adapter",
+  "version": "0.1.0",
+  "capabilities": ["code", "shell"],
+  "handler_command": "python3 sdk/adapter/examples/shell_adapter.py"
+}
