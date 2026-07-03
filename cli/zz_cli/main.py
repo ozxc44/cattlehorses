@@ -424,6 +424,181 @@ def login(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  INIT — guided first-time setup
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _init_http(method: str, base_url: str, path: str, body: Optional[dict] = None,
+               token: Optional[str] = None, timeout: float = 10.0) -> tuple[int, dict]:
+    """Minimal urllib HTTP helper so `zz init` works without the SDK installed."""
+    import urllib.request
+    import urllib.error
+    url = base_url.rstrip("/") + path
+    data = json.dumps(body).encode() if body else None
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read().decode() or "{}")
+        except Exception:
+            return e.code, {"detail": str(e)}
+    except urllib.error.URLError as e:
+        raise ConnectionError(f"Cannot reach {url}: {e.reason}")
+
+
+@app.command()
+def init(
+    base_url: str = typer.Option(
+        None, "--base-url", help="Platform base URL (e.g. http://192.168.1.10:18080/agent)"
+    ),
+    email: Optional[str] = typer.Option(None, "--email", "-e", help="Existing account email"),
+    password: Optional[str] = typer.Option(None, "--password", "-p", help="Account password"),
+    project_name: Optional[str] = typer.Option(None, "--project", help="Project name to create"),
+    agent_name: Optional[str] = typer.Option(None, "--agent", help="Agent name to register"),
+) -> None:
+    """Guided first-time setup: connect to a platform, log in, create a project
+    and an agent, then print how to keep the executor running.
+
+    Fully interactive when options are omitted; fully scriptable when provided.
+    """
+    console.print("[bold cyan]zz init[/bold cyan] — guided platform setup\n")
+
+    # 1. Platform base URL
+    url = base_url or typer.prompt("Platform base URL", default=DEFAULT_BASE_URL)
+    try:
+        status, body = _init_http("GET", url, "/v1/health", timeout=8)
+        if status == 200:
+            console.print(f"  [green]✓[/green] Reachable (status={body.get('status')})")
+        else:
+            console.print(f"  [yellow]! Reachable but health returned {status}[/yellow]")
+    except ConnectionError as e:
+        console.print(f"  [red]✗ Cannot reach {url}[/red]")
+        console.print(f"    {e}")
+        console.print("    Start the platform first: [cyan]bash deploy/setup.sh[/cyan]")
+        raise typer.Exit(1)
+    # persist so subsequent zz commands target this platform
+    config = _load_config()
+    config["base_url"] = url
+    _save_config(config)
+
+    # 2. Authenticate (register or login)
+    token = None
+    user_info: dict = {}
+    if email and password:
+        # Non-interactive: try login first, fall back to register if the account
+        # does not exist yet (covers both first-run and returning users).
+        status, body = _init_http("POST", url, "/v1/auth/token", {"email": email, "password": password})
+        if status == 200:
+            token = body.get("access_token")
+            user_info = body.get("user", {})
+            console.print(f"  [green]✓[/green] Logged in as {user_info.get('display_name') or email}")
+        else:
+            uname = email.split("@")[0]
+            status, body = _init_http("POST", url, "/v1/auth/register",
+                                      {"email": email, "password": password, "username": uname})
+            if status == 201:
+                token = body.get("access_token")
+                user_info = body.get("user", {})
+                console.print(f"  [green]✓[/green] Registered as {user_info.get('display_name') or uname}")
+            else:
+                console.print(f"  [red]✗ Auth failed ({status}): {body.get('detail')}[/red]")
+                raise typer.Exit(1)
+        choice = "done"
+    else:
+        choice = typer.prompt("Account? (r)egister new / (l)ogin existing", default="l").strip().lower()
+
+    if choice.startswith("r"):
+        em = email or typer.prompt("Email")
+        pw = password or typer.prompt("Password", hide_input=True, confirmation_prompt=True)
+        uname = typer.prompt("Username", default=em.split("@")[0])
+        status, body = _init_http("POST", url, "/v1/auth/register",
+                                  {"email": em, "password": pw, "username": uname})
+        if status != 201:
+            console.print(f"  [red]✗ Register failed ({status}): {body.get('detail')}[/red]")
+            raise typer.Exit(1)
+        token = body.get("access_token")
+        user_info = body.get("user", {})
+        console.print(f"  [green]✓[/green] Registered as {user_info.get('display_name') or uname}")
+    else:
+        em = email or typer.prompt("Email")
+        pw = password or typer.prompt("Password", hide_input=True)
+        status, body = _init_http("POST", url, "/v1/auth/token", {"email": em, "password": pw})
+        if status != 200:
+            console.print(f"  [red]✗ Login failed ({status}): {body.get('detail')}[/red]")
+            raise typer.Exit(1)
+        token = body.get("access_token")
+        user_info = body.get("user", {})
+        console.print(f"  [green]✓[/green] Logged in as {user_info.get('display_name') or em}")
+
+    config = _load_config()
+    config["access_token"] = token
+    config["api_key"] = token
+    config["base_url"] = url
+    _save_config(config)
+    _write_identity_file(
+        _build_identity(base_url=url, user_token=token, user=user_info),
+        _get_identity_path(),
+    )
+
+    # 3. Project
+    pid: Optional[str] = None
+    create_proj = project_name is not None or typer.confirm("Create a project space?", default=True)
+    if create_proj:
+        pname = project_name or typer.prompt("Project name", default="my-project")
+        status, body = _init_http("POST", url, "/v1/projects", {"name": pname}, token=token)
+        if status in (200, 201):
+            pid = body.get("id")
+            console.print(f"  [green]✓[/green] Project: {pname} ({pid})")
+            config["default_project"] = pid
+            _save_config(config)
+        else:
+            console.print(f"  [yellow]! Project create returned {status}: {body.get('detail')}[/yellow]")
+
+    # 4. Agent
+    create_agent = agent_name is not None or typer.confirm("Register an agent now?", default=True)
+    agent_key: Optional[str] = None
+    if create_agent and pid:
+        aname = agent_name or typer.prompt("Agent name", default="my-worker")
+        status, body = _init_http("POST", url, f"/v1/projects/{pid}/agents", {"name": aname}, token=token)
+        if status in (200, 201):
+            agent_key = body.get("api_key")
+            console.print(f"  [green]✓[/green] Agent: {aname} ({body.get('id')})")
+            console.print(f"    [bold]API key:[/bold] {agent_key}")
+            _write_identity_file(
+                _build_identity(
+                    base_url=url, user_token=token, user=user_info,
+                    project={"id": pid}, agent={"id": body.get("id"), "name": aname, "project_id": pid},
+                    agent_key=agent_key,
+                ),
+                _get_identity_path(),
+            )
+        else:
+            console.print(f"  [yellow]! Agent create returned {status}: {body.get('detail')}[/yellow]")
+
+    # 5. Next steps — executor keepalive guidance
+    console.print("\n[bold]── Next: keep the executor alive ──[/bold]")
+    plat = sys.platform
+    key_arg = f"--api-key {agent_key}" if agent_key else "--api-key <your-agent-key>"
+    if plat == "darwin":
+        console.print("macOS (launchd):")
+        console.print(f"  [cyan]zz agent executor {key_arg} --base-url {url}[/cyan]")
+        console.print("  The daemon auto-generates and loads a launchd plist (KeepAlive).")
+    elif plat.startswith("linux"):
+        console.print("Linux (systemd):")
+        console.print(f"  [cyan]zz agent executor {key_arg} --base-url {url}[/cyan]")
+        console.print("  Or with nohup: [cyan]nohup zz agent executor {key_arg} --base-url {url} &[/cyan]")
+    else:
+        console.print(f"Platform {plat}:")
+        console.print(f"  [cyan]nohup zz agent executor {key_arg} --base-url {url} &[/cyan]")
+    console.print("\nThen dispatch work from the dashboard or: [cyan]zz orchestrations create --help[/cyan]")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  IDENTITY
 # ═══════════════════════════════════════════════════════════════════════════════
 
