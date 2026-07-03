@@ -22,7 +22,7 @@ import textwrap
 
 KIMI_BIN = os.environ.get("KIMI_BIN", os.path.join(os.path.expanduser("~/.kimi-code/bin"), "kimi"))
 WORKSPACE = os.environ.get("KIMI_WORKSPACE", os.getcwd())
-TIMEOUT_SECONDS = int(os.environ.get("KIMI_TIMEOUT_SECONDS", "270"))
+TIMEOUT_SECONDS = int(os.environ.get("KIMI_TIMEOUT_SECONDS", "1500"))
 
 
 def build_prompt(req: dict) -> str:

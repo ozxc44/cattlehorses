@@ -26,7 +26,7 @@ import textwrap
 
 MIMO_BIN = os.environ.get("MIMO_BIN", os.path.join(os.path.expanduser("~/.mimocode/bin"), "mimo"))
 WORKSPACE = os.environ.get("MIMO_INVOKE_WORKSPACE", os.getcwd())
-TIMEOUT_SECONDS = int(os.environ.get("MIMO_INVOKE_TIMEOUT_SECONDS", "270"))
+TIMEOUT_SECONDS = int(os.environ.get("MIMO_INVOKE_TIMEOUT_SECONDS", "1500"))
 
 
 def build_prompt(req: dict) -> str:
