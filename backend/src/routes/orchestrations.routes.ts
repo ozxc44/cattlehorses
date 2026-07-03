@@ -25,6 +25,7 @@ import {
 import { MessageVisibility } from '../entities/message.entity';
 import { getAgentPresence } from '../services/agent-presence.service';
 import { SessionDispatchService } from '../services/session-dispatch.service';
+import { checkDependenciesMet } from '../services/task-graph.service';
 import {
   writeTaskMd,
   writeResultMd,
@@ -650,6 +651,17 @@ router.patch(
         ProjectOrchestrationTaskStatus.BLOCKED,
         ProjectOrchestrationTaskStatus.FAILED,
       ];
+      if (claimableStatuses.includes(task.status)) {
+        const dependencyCheck = await checkDependenciesMet(task);
+        if (!dependencyCheck.met) {
+          res.status(409).json({
+            detail: 'Task has unmet dependencies',
+            code: 'DEPENDENCIES_NOT_MET',
+            unmet: dependencyCheck.unmet,
+          });
+          return;
+        }
+      }
       const updateFields: Record<string, unknown> = {
         status: ProjectOrchestrationTaskStatus.RUNNING,
       };
