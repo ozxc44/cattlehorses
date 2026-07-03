@@ -29,45 +29,48 @@
 
 ```bash
 git clone https://github.com/ozxc44/cattlehorses.git && cd cattlehorses
-cd deploy/nas
-# 编辑 .env (数据库/JWT 密钥/Gitea 配置)
-cp .env.example .env
-docker compose --env-file .env up -d
+bash deploy/setup.sh        # 一键：自检 Docker + 自动生成密钥 + 检测 IP + 启动 + 健康检查
 # 平台启动在 http://<your-platform-host>:18080/agent
 ```
 
-### 2. 接入本地模型（agent 侧）
+> `setup.sh` 自动生成 `.env`(JWT/DB/Webhook 密钥),无需手动编辑。Gitea 默认不开(可选 `INCLUDE_GITEA=1`)。
 
-在装有本地模型（kimi/claude/codex/hermes/mimo）的机器上：
+### 2. CLI 引导接入（在任意一台机器上）
 
-```bash
-# 下载统一 runtime（纯 Python 标准库，无依赖）
-curl -s http://<your-platform-host>:18080/agent/v1/agent/bootstrap/runtime.py -o runtime.py
-
-# 一键发现本机所有模型 + 自启动
-python3 runtime.py --discover --install-launchd --port 7788
-```
-
-runtime 会扫描本机的 kimi/mimo/codex/claude/hermes + API 模型（deepseek/openai/moonshot/GLM），为**每个模型生成一个独立 agent 身份**，并打印注册命令。
-
-### 3. 注册模型到平台
-
-按 `--discover` 打印的命令，把每个模型注册成平台上的 agent：
+装 CLI 后跑 `zz init`,它会交互式引导你:连接平台 → 注册账号 → 创建项目 → 注册 agent → 打印保活命令。
 
 ```bash
-zz agents register -p <project-id> -n kimi-agent \
-  --endpoint-url http://<your-host>:7788/zz/v1/invoke \
-  --invoke-secret <secret-from-agents.json>
+pip install -e cli/        # 或 pip install zz-agent-cli
+zz init --base-url http://<your-platform-host>:18080/agent
 ```
+
+`zz init` 完成后你会得到一个 agent API key (`zzk_...`)和对应的 executor 启动命令。
+
+### 3. 让 agent 真正执行任务（executor）
+
+把 executor 脚本拷到装模型的机器上,生成保活配置(launchd/systemd),agent 就会自动轮询平台领活、调用本地 CLI 执行、回传结果:
+
+```bash
+# 见 deploy/nas/agent-executors/README.md 完整指南
+cp deploy/nas/agent-executors/*.py ~/.zz-agent/
+./deploy/nas/agent-executors/generate-executor-config.sh kimi \
+    --base-url http://<your-platform-host>:18080/agent \
+    --key zzk_<your-agent-key> --install
+```
+
+支持 codex / kimi / mimo,也可接入任意 CLI(claude/gemini/自定义脚本)。
 
 ### 4. PM 派活，模型干活
 
 PM（主 agent）通过平台派任务，平台按 agent 身份精确路由到对应模型实例化执行：
 
 ```bash
+zz orchestrations create --project <id> --title "实现登录" \
+    --objective "..." --main-agent <pm-id> --workers <worker-id>
 zz tasks create -p <project> -o <orchestration> \
   -t "实现用户登录" -g "用 JWT 实现登录" -a <worker-agent-id>
 ```
+
 
 ## 架构
 

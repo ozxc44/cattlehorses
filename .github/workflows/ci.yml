@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       api_url:
-        description: "Optional public API base URL for E2E (e.g. https://www.zhuzeyang.xyz/agent)"
+        description: "Optional public API base URL for E2E (e.g. http://localhost:18080/agent)"
         required: false
         default: ""
 

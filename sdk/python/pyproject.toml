@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://www.zhuzeyang.xyz/agent"
+Homepage = "https://github.com/ozxc44/cattlehorses"
 Source = "https://github.com/zhuzeyang/zz-agent"
 
 [tool.setuptools.packages.find]

@@ -62,13 +62,13 @@ info:
     tokens are limited to their assigned project, sessions, runs, and own health.
   contact:
     name: ZZ Agent Team
-    url: https://zhuzeyang.xyz/agent
+    url: http://localhost:18080/agent
   license:
     name: Proprietary
-    url: https://zhuzeyang.xyz/agent
+    url: http://localhost:18080/agent
 
 servers:
-  - url: https://zhuzeyang.xyz/agent
+  - url: http://localhost:18080/agent
     description: Production
   - url: http://127.0.0.1:8000
     description: Local development
