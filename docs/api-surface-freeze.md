@@ -120,8 +120,8 @@ All other new endpoints must be flagged at the weekly PM review in the ledger.
 
 A machine-checkable guard enforces the project-space route surface inventory across **four** artifacts at once — source (two files), the in-script manifest, this freeze doc, and the capability matrix — so a developer cannot update two of them and silently forget the rest:
 
-- **Script:** `scripts/validate-project-space-routes.js` — parses both `project-space.routes.ts` (GP-Required + GP-Support) and `project-space-frozen.routes.ts` (Frozen), enumerates all `router.METHOD(...)` registrations, compares against a known 25-route manifest partitioned into three families, AND cross-checks the same family counts + frozen sub-route names against this document and `.codex/pm-workers/current-capability-matrix.md`:
-  - **GP-Required** (15 routes): files CRUD (incl. upload + PATCH/DELETE by id), read helpers (raw/download/blame, revisions/compare), README, agents-rules (AGENTS.md), archive.zip — in `project-space.routes.ts`
+- **Script:** `scripts/validate-project-space-routes.js` — parses both `project-space.routes.ts` (GP-Required + GP-Support) and `project-space-frozen.routes.ts` (Frozen), enumerates all `router.METHOD(...)` registrations, compares against a known 27-route manifest partitioned into three families, AND cross-checks the same family counts + frozen sub-route names against this document and `.codex/pm-workers/current-capability-matrix.md`:
+  - **GP-Required** (17 routes): files CRUD (incl. upload, import/import-preview + PATCH/DELETE by id), read helpers (raw/download/blame, revisions/compare), README, agents-rules (AGENTS.md), archive.zip — in `project-space.routes.ts`
   - **GP-Support** (5 routes): memories CRUD, join-requests — in `project-space.routes.ts`
   - **Frozen** (5 routes): clone, file-proposals
 - **Test:** `backend/tests/project-space-route-guard.test.ts` — runs the guard end-to-end against the real artifacts (exit 0) and proves drift is caught by pointing the guard at doctored freeze-doc/matrix temp files (exit ≠ 0). Runs as part of `npm test`.

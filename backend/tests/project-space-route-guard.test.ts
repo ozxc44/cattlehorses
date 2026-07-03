@@ -82,7 +82,7 @@ async function main(): Promise<void> {
       const { status, stdout, stderr } = runGuard();
       const combined = stdout + stderr;
       assert.equal(status, 0, `Guard script exited ${status}:\n${combined}`);
-      assert(stdout.includes('Routes found in source: 25'), `Expected 25 routes, got: ${stdout}`);
+      assert(stdout.includes('Routes found in source: 27'), `Expected 27 routes, got: ${stdout}`);
       assert(stdout.includes('Frozen-surface guard PASSED'), `Expected PASSED in output:\n${stdout}`);
       // Confirm the new cross-check actually ran against the real artifacts.
       assert(stdout.includes('Cross-check artifacts:'), `Guard did not report cross-check:\n${stdout}`);
@@ -92,7 +92,7 @@ async function main(): Promise<void> {
       assert(stdout.includes('project-space.routes.ts'), `Guard did not mention main source file:\n${stdout}`);
       assert(stdout.includes('project-space-frozen.routes.ts'), `Guard did not mention frozen source file:\n${stdout}`);
       // Manifest-derived counts must appear for all three families.
-      assert(/GP-Required:\s+source=15\s+manifest=15/.test(stdout), `GP-Required count mismatch:\n${stdout}`);
+      assert(/GP-Required:\s+source=17\s+manifest=17/.test(stdout), `GP-Required count mismatch:\n${stdout}`);
       assert(/GP-Support:\s+source=5\s+manifest=5/.test(stdout), `GP-Support count mismatch:\n${stdout}`);
       assert(/Frozen:\s+source=5\s+manifest=5/.test(stdout), `Frozen count mismatch:\n${stdout}`);
     });

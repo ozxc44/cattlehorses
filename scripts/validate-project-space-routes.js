@@ -53,6 +53,8 @@ const MANIFEST = [
   { method: 'GET',    pattern: '/v1/projects/:project_id/files',                         family: 'gp-required' },
   { method: 'POST',   pattern: '/v1/projects/:project_id/files',                         family: 'gp-required' },
   { method: 'POST',   pattern: '/v1/projects/:project_id/files/upload',                  family: 'gp-required' },
+  { method: 'POST',   pattern: '/v1/projects/:project_id/files/import-preview',          family: 'gp-required' },
+  { method: 'POST',   pattern: '/v1/projects/:project_id/files/import',                  family: 'gp-required' },
   { method: 'GET',    pattern: '/v1/projects/:project_id/files/search',                  family: 'gp-required' },
   { method: 'GET',    pattern: '/v1/projects/:project_id/files/:file_id',                family: 'gp-required' },
   { method: 'PATCH',  pattern: '/v1/projects/:project_id/files/:file_id',                family: 'gp-required' },

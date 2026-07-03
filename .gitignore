@@ -21,7 +21,13 @@ multiworker-evidence-*.json
 *.err.log
 
 # ─── Local agent runtime state (NEVER commit — contains runtime data, PM workers, loops) ───
-.codex/
+# Ignore .codex/ contents EXCEPT the capability-matrix contract doc, which the
+# frozen-surface route guard (scripts/validate-project-space-routes.js) reads as
+# a checked-in artifact. PM worker batches, gk reviews, etc. stay local-only.
+.codex/*
+!.codex/pm-workers/
+.codex/pm-workers/*
+!.codex/pm-workers/current-capability-matrix.md
 .autonomous-loop/
 .zz-agent/
 .zcode/cli/db/
