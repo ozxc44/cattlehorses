@@ -19,12 +19,18 @@ import time
 import urllib.request
 
 
-BASE_URL = os.environ.get("ZZ_BASE_URL", "http://192.168.31.119:18080/agent")
+BASE_URL = os.environ.get("ZZ_BASE_URL", "http://127.0.0.1:18080/agent")
 IDENTITY_PATH = pathlib.Path(
-    os.environ.get("ZZ_IDENTITY_PATH", "/Users/z/.zz-agent/identities/mimo-agent.json")
+    os.environ.get(
+        "ZZ_IDENTITY_PATH",
+        os.path.join(os.path.expanduser("~/.zz-agent"), "identities", "mimo-agent.json"),
+    )
 )
 EXECUTOR_PATH = pathlib.Path(
-    os.environ.get("ZZ_EXECUTOR_PATH", "/Users/z/.zz-agent/executor.py")
+    os.environ.get(
+        "ZZ_EXECUTOR_PATH",
+        os.path.join(os.path.expanduser("~/.zz-agent"), "executor.py"),
+    )
 )
 # Fallback: the key is known from the running process if no identity file exists.
 FALLBACK_API_KEY = os.environ.get("MIMO_AGENT_KEY", "")
@@ -74,7 +80,7 @@ def main() -> None:
         no_self_update=True,
         handler_cmd=os.environ.get(
             "MIMO_INVOKE_HANDLER",
-            "/Library/Developer/CommandLineTools/usr/bin/python3 /Users/z/.zz-agent/mimo-invoke-handler.py",
+            f"{sys.executable} {os.path.join(os.path.expanduser('~/.zz-agent'), 'mimo-invoke-handler.py')}",
         ),
     )
     print("Mimo worker+PM executor wrapper started", flush=True)

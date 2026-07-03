@@ -16,9 +16,12 @@ import time
 import urllib.request
 
 
-BASE_URL = os.environ.get("ZZ_BASE_URL", "http://192.168.31.119:18080/agent")
+BASE_URL = os.environ.get("ZZ_BASE_URL", "http://127.0.0.1:18080/agent")
 EXECUTOR_PATH = pathlib.Path(
-    os.environ.get("ZZ_EXECUTOR_PATH", "/Users/z/.zz-agent/executor.py")
+    os.environ.get(
+        "ZZ_EXECUTOR_PATH",
+        os.path.join(os.path.expanduser("~/.zz-agent"), "executor.py"),
+    )
 )
 FALLBACK_API_KEY = os.environ.get("KIMI_AGENT_KEY", "")
 EXECUTOR_URL = f"{BASE_URL.rstrip('/')}/v1/agent/bootstrap/executor.py"
@@ -56,7 +59,7 @@ def main() -> None:
         no_self_update=True,
         handler_cmd=os.environ.get(
             "KIMI_INVOKE_HANDLER",
-            "/Library/Developer/CommandLineTools/usr/bin/python3 /Users/z/.zz-agent/kimi-worker-handler.py",
+            f"{sys.executable} {os.path.join(os.path.expanduser('~/.zz-agent'), 'kimi-worker-handler.py')}",
         ),
     )
     print("Kimi worker+PM executor wrapper started", flush=True)

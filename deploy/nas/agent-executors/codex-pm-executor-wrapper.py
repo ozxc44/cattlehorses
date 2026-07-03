@@ -17,15 +17,18 @@ import time
 import urllib.request
 
 
-BASE_URL = os.environ.get("ZZ_BASE_URL", "http://192.168.31.119:18080/agent")
+BASE_URL = os.environ.get("ZZ_BASE_URL", "http://127.0.0.1:18080/agent")
 IDENTITY_PATH = pathlib.Path(
     os.environ.get(
         "ZZ_IDENTITY_PATH",
-        "/Users/z/.zz-agent/identities/codex-test-agent.json",
+        os.path.join(os.path.expanduser("~/.zz-agent"), "identities", "codex-test-agent.json"),
     )
 )
 EXECUTOR_PATH = pathlib.Path(
-    os.environ.get("ZZ_EXECUTOR_PATH", "/Users/z/.zz-agent/executor.py")
+    os.environ.get(
+        "ZZ_EXECUTOR_PATH",
+        os.path.join(os.path.expanduser("~/.zz-agent"), "executor.py"),
+    )
 )
 EXECUTOR_URL = f"{BASE_URL.rstrip('/')}/v1/agent/bootstrap/executor.py"
 INTERVAL = int(os.environ.get("ZZ_EXECUTOR_INTERVAL", "30"))
@@ -70,7 +73,7 @@ def main() -> None:
         no_self_update=True,
         handler_cmd=os.environ.get(
             "CODEX_INVOKE_HANDLER",
-            "/Library/Developer/CommandLineTools/usr/bin/python3 /Users/z/.zz-agent/codex-invoke-handler.py",
+            f"{sys.executable} {os.path.join(os.path.expanduser('~/.zz-agent'), 'codex-invoke-handler.py')}",
         ),
     )
     print("Codex worker+PM executor wrapper started", flush=True)

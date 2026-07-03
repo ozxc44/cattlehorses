@@ -1,0 +1,23 @@
+# Template for a systemd-managed agent executor (Linux).
+# Generate a concrete unit with deploy/nas/agent-executors/generate-executor-config.sh
+# Then: sudo cp <name>.service /etc/systemd/system/ && sudo systemctl enable --now <name>
+# Placeholders: {{ZZ_BASE_URL}} {{AGENT_KEY}} {{PYTHON}} {{ZZ_AGENT_HOME}} {{LABEL}} {{WRAPPER}}
+[Unit]
+Description=zz-agent executor ({{LABEL}})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=ZZ_BASE_URL={{ZZ_BASE_URL}}
+Environment=ZZ_EXECUTOR_INTERVAL=30
+Environment=AGENT_KEY={{AGENT_KEY}}
+WorkingDirectory={{HOME}}
+ExecStart={{PYTHON}} {{ZZ_AGENT_HOME}}/{{WRAPPER}}
+Restart=always
+RestartSec=10
+StandardOutput=append:{{ZZ_AGENT_HOME}}/{{LABEL}}.systemd.log
+StandardError=append:{{ZZ_AGENT_HOME}}/{{LABEL}}.systemd.err.log
+
+[Install]
+WantedBy=multi-user.target

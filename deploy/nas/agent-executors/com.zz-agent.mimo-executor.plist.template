@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList/1.0.dtd">
+<!-- Template for a launchd-managed agent executor (macOS).
+     Generate a concrete plist with deploy/nas/agent-executors/generate-executor-config.sh
+     Placeholders: {{ZZ_BASE_URL}} {{AGENT_KEY}} {{PYTHON}} {{ZZ_AGENT_HOME}} {{LABEL}} {{WRAPPER}} -->
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>ZZ_BASE_URL</key>
+		<string>{{ZZ_BASE_URL}}</string>
+		<key>ZZ_EXECUTOR_INTERVAL</key>
+		<string>30</string>
+		<key>MIMO_AGENT_KEY</key>
+		<string>{{AGENT_KEY}}</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>{{LABEL}}</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{PYTHON}}</string>
+		<string>{{ZZ_AGENT_HOME}}/{{WRAPPER}}</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>{{ZZ_AGENT_HOME}}/{{LABEL}}.launchd.err.log</string>
+	<key>StandardOutPath</key>
+	<string>{{ZZ_AGENT_HOME}}/{{LABEL}}.launchd.log</string>
+	<key>WorkingDirectory</key>
+	<string>{{HOME}}</string>
+</dict>
+</plist>

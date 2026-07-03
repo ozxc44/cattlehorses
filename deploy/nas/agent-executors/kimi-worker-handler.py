@@ -20,11 +20,8 @@ import subprocess
 import sys
 import textwrap
 
-KIMI_BIN = os.environ.get("KIMI_BIN", "/Users/z/.kimi-code/bin/kimi")
-WORKSPACE = os.environ.get(
-    "KIMI_WORKSPACE",
-    "/Users/z/Documents/Codex/zhuzeyang-agent",
-)
+KIMI_BIN = os.environ.get("KIMI_BIN", os.path.join(os.path.expanduser("~/.kimi-code/bin"), "kimi"))
+WORKSPACE = os.environ.get("KIMI_WORKSPACE", os.getcwd())
 TIMEOUT_SECONDS = int(os.environ.get("KIMI_TIMEOUT_SECONDS", "270"))
 
 
@@ -76,7 +73,7 @@ def main() -> int:
     prompt = build_prompt(req)
     env = dict(os.environ)
     env["PATH"] = ":".join([
-        "/Users/z/.kimi-code/bin",
+        os.path.expanduser("~/.kimi-code/bin"),
         "/opt/homebrew/bin",
         "/usr/local/bin",
         "/usr/bin",

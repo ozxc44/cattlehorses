@@ -24,11 +24,8 @@ import sys
 import tempfile
 import textwrap
 
-MIMO_BIN = os.environ.get("MIMO_BIN", "/Users/z/.mimocode/bin/mimo")
-WORKSPACE = os.environ.get(
-    "MIMO_INVOKE_WORKSPACE",
-    "/Users/z/Documents/Codex/zhuzeyang-agent",
-)
+MIMO_BIN = os.environ.get("MIMO_BIN", os.path.join(os.path.expanduser("~/.mimocode/bin"), "mimo"))
+WORKSPACE = os.environ.get("MIMO_INVOKE_WORKSPACE", os.getcwd())
 TIMEOUT_SECONDS = int(os.environ.get("MIMO_INVOKE_TIMEOUT_SECONDS", "270"))
 
 
@@ -89,7 +86,7 @@ def main() -> int:
         ]
         env = dict(os.environ)
         env["PATH"] = ":".join([
-            "/Users/z/.mimocode/bin",
+            os.path.expanduser("~/.mimocode/bin"),
             "/opt/homebrew/bin",
             "/usr/local/bin",
             "/usr/bin",

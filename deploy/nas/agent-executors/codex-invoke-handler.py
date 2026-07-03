@@ -20,17 +20,17 @@ CODEX_BIN = os.environ.get(
     "CODEX_BIN",
     "/Applications/Codex.app/Contents/Resources/codex",
 )
-CODEX_HOME = os.environ.get("CODEX_HOME", "/Users/z/.codex")
+CODEX_HOME = os.environ.get("CODEX_HOME", os.path.expanduser("~/.codex"))
 WORKSPACE = os.environ.get(
     "CODEX_INVOKE_WORKSPACE",
-    "/Users/z/Documents/Codex/zhuzeyang-agent",
+    os.getcwd(),
 )
 TIMEOUT_SECONDS = int(os.environ.get("CODEX_INVOKE_TIMEOUT_SECONDS", "1500"))
 
 
 def build_prompt(req: dict) -> str:
     safe_req = dict(req)
-    platform = "http://192.168.31.119:18080/agent"
+    platform = os.environ.get("ZZ_BASE_URL", "http://127.0.0.1:18080/agent")
     project_id = req.get("project_id") or req.get("project", {}).get("id")
     agent_id = req.get("agent_id") or req.get("agent", {}).get("id")
     trigger = req.get("trigger") or {}
@@ -87,7 +87,7 @@ def main() -> int:
         ]
         try:
             child_env = dict(os.environ)
-            child_env.setdefault("HOME", "/Users/z")
+            child_env.setdefault("HOME", os.path.expanduser("~"))
             child_env.setdefault("CODEX_HOME", CODEX_HOME)
             child_env["PATH"] = ":".join(
                 [
