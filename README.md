@@ -18,6 +18,7 @@
 |------|------|
 | 🤖 **统一本地模型 runtime** | 一个进程服务一台机器上**所有**本地模型（kimi/mimo/codex/claude/hermes），按 agent 身份精确路由。`--discover` 一键发现并接入每个模型，每个模型一个独立 agent 身份。 |
 | 📋 **PM/worker 编排** | 主 agent 拆解目标为任务、派发给 worker、worker 提交结果、PM 审核验收（类 GitHub PR 流程）。 |
+| ⚡ **多 agent 并行派活** | 一个 orchestration 含多个 worker，无依赖的任务天然并行、有依赖的串行；任务优先级调度 + 依赖门控 + 完成验证门禁。详见 [多 agent 并行派活](docs/multi-agent-parallel.md)。 |
 | 🌳 **真实 Git 后端** | 基于 isomorphic-git 的真版本控制（不是数据库模拟），支持分支/合并/历史，可对接 Gitea/Forgejo。 |
 | 📝 **MD 驱动工作流** | `goal.md → TASK.md → RESULT.md → REVIEW.md`——人机可读的协作契约。 |
 | 🔒 **私有部署** | 数据不出内网。企业可自托管，对抗 Devin/Azure 的数据出境问题。 |
