@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { Not } from 'typeorm';
 import { AppDataSource } from '../data-source';
 import { authenticateAgentApiKey, authenticateJwtOrAgentApiKey } from '../middleware/auth';
 import { requirePermission, Permission, Role } from '../middleware/rbac';
@@ -446,15 +447,17 @@ export async function ackInboxItemsForTask(
 
 export async function getPendingInboxCount(agentId: string): Promise<number> {
   const repo = AppDataSource.getRepository(AgentInboxItem);
-  if (!INBOX_LEASE_ENABLED) {
-    return repo.count({
-      where: { recipientAgentId: agentId, status: InboxItemStatus.UNREAD },
-    });
-  }
-  // When leases are enabled, pending = unread regardless of lease state
-  // (leased items are still pending until acked)
+  // Pending = unread real task/event notifications, excluding auto-generated
+  // execution_nudge hints. Nudges are transient reminders, not work items, so
+  // they must not inflate the pending count (otherwise acking all real tasks
+  // would still show pending>0, and every heartbeat would keep re-nudging).
+  // Leased items still count as pending until acked.
   return repo.count({
-    where: { recipientAgentId: agentId, status: InboxItemStatus.UNREAD },
+    where: {
+      recipientAgentId: agentId,
+      status: InboxItemStatus.UNREAD,
+      eventType: Not('execution_nudge'),
+    },
   });
 }
 
