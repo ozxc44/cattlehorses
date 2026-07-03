@@ -75,6 +75,9 @@ export class ProjectOrchestrationTask {
   @Column({ name: 'depends_on', type: 'simple-json', nullable: true })
   dependsOn?: string[] | null;
 
+  @Column({ type: 'integer', default: 0 })
+  priority!: number;
+
   @Column({ name: 'review_notes', type: 'text', nullable: true })
   reviewNotes?: string | null;
 

@@ -372,7 +372,7 @@ router.get(
       const whereStatus = statusFilter
         ? { assignedAgentId: agentId, status: statusFilter }
         : { assignedAgentId: agentId };
-      let tasks = await taskRepo.find({ where: whereStatus, order: { createdAt: 'DESC' }, take: 200 });
+      let tasks = await taskRepo.find({ where: whereStatus, order: { priority: 'DESC', createdAt: 'ASC' }, take: 200 });
       if (!statusFilter) {
         // Exclude terminal (approved) tasks in-memory when no explicit filter.
         tasks = tasks.filter((t) => t.status !== ProjectOrchestrationTaskStatus.APPROVED);
@@ -388,6 +388,7 @@ router.get(
           worker_task_path: t.workerTaskPath,
           worker_context_path: t.workerContextPath,
           acceptance_criteria: t.acceptanceCriteria ?? [],
+          priority: t.priority ?? 0,
           review_notes: t.reviewNotes ?? null,
           requested_changes: t.requestedChanges ?? null,
           dispatched_at: t.dispatchedAt ?? null,

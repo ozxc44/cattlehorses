@@ -289,6 +289,7 @@ router.post(
           workerContextPath: `${orchestration.basePath}/workers/${taskId}.worker_context.md`,
           acceptanceCriteria: normalizeStringArray(req.body.acceptance_criteria),
           dependsOn: normalizeStringArray(req.body.depends_on),
+          priority: normalizeTaskPriority(req.body.priority),
           createdByUserId: actor.userId,
           createdByAgentId: actor.agentId,
           dispatchedAt: isDispatched ? new Date() : undefined,
@@ -1246,6 +1247,7 @@ router.post(
           workerContextPath: `${orchestration.basePath}/workers/${newTaskId}.worker_context.md`,
           acceptanceCriteria: task.acceptanceCriteria ?? [],
           dependsOn: task.dependsOn ?? [],
+          priority: task.priority ?? 0,
           createdByUserId: actor.userId,
           createdByAgentId: actor.agentId,
           dispatchedAt: new Date(),
@@ -1954,6 +1956,7 @@ function serializeTask(task: ProjectOrchestrationTask) {
     evidence_path: task.evidencePath ?? null,
     acceptance_criteria: task.acceptanceCriteria ?? [],
     depends_on: task.dependsOn ?? [],
+    priority: task.priority ?? 0,
     review_notes: task.reviewNotes ?? null,
     requested_changes: task.requestedChanges ?? null,
     created_by_user_id: task.createdByUserId ?? null,
@@ -1983,6 +1986,7 @@ function serializeTaskLedgerItem(task: ProjectOrchestrationTask) {
     evidence_path: task.evidencePath ?? null,
     acceptance_criteria: task.acceptanceCriteria ?? [],
     depends_on: task.dependsOn ?? [],
+    priority: task.priority ?? 0,
     review_notes: task.reviewNotes ?? null,
     requested_changes: task.requestedChanges ?? null,
     dispatched_at: task.dispatchedAt ?? null,
@@ -2571,6 +2575,16 @@ function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))]
     .map((item) => item.trim());
+}
+
+function normalizeTaskPriority(value: unknown): number {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim()
+      ? Number(value)
+      : 0;
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.trunc(parsed));
 }
 
 function normalizeEvidence(value: unknown): Record<string, unknown> {
