@@ -34,12 +34,18 @@ export async function runTaskStalenessSweep(now = new Date()): Promise<{ marked:
 
   // Candidates: dispatched-but-unclaimed OR running-but-stalled, in a non-terminal
   // orchestration, not already marked stale.
+  // JSON access is dialect-specific: Postgres uses `col::jsonb ->> 'key'`,
+  // SQLite uses `json_extract(col, '$.key')`. Tests run on SQLite, prod on Postgres.
+  const isSqlite = AppDataSource.options.type === 'better-sqlite3';
+  const staleNotifiedNull = isSqlite
+    ? "(task.metadata IS NULL OR json_extract(task.metadata, '$.stale_notified_at') IS NULL)"
+    : "(task.metadata IS NULL OR (task.metadata::jsonb ->> 'stale_notified_at') IS NULL)";
   const candidates = await taskRepo
     .createQueryBuilder('task')
     .innerJoinAndSelect('task.orchestration', 'orch')
     .where('task.status IN (:...live)', { live: [ProjectOrchestrationTaskStatus.DISPATCHED, ProjectOrchestrationTaskStatus.RUNNING, ProjectOrchestrationTaskStatus.READY_FOR_REVIEW] })
     .andWhere('orch.status IN (:...running)', { running: [ProjectOrchestrationStatus.RUNNING, ProjectOrchestrationStatus.PLANNING] })
-    .andWhere("(task.metadata IS NULL OR (task.metadata::jsonb ->> 'stale_notified_at') IS NULL)")
+    .andWhere(staleNotifiedNull)
     .getMany();
 
   let marked = 0;
