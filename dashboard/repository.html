@@ -782,6 +782,7 @@
         branchSelect: document.getElementById("branchSelect"),
         pathCrumb: document.getElementById("pathCrumb"),
         subnav: document.getElementById("repoSubnav"),
+        repoContent: document.getElementById("repoContent"),
         archiveLink: document.getElementById("archiveLink"),
         workLink: document.getElementById("workLink"),
         dashboardLink: document.getElementById("dashboardLink"),
@@ -1742,6 +1743,9 @@
           // Reset loaded flags because branch may differ.
           state.loaded = { overview: false, files: false, compare: false, history: false, tags: false };
           setView(view && VIEWS.indexOf(view) >= 0 ? view : "overview");
+        }).catch(function (err) {
+          console.error("loadProject render failed:", err);
+          renderNoProject();
         });
       }
 
