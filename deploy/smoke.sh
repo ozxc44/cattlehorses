@@ -362,7 +362,7 @@ if [[ "${RUN_ORCHESTRATION_SMOKE:-0}" == "1" ]]; then
   echo "  claim status: $claim_status"
 
   echo "  ==> worker completes task"
-  complete_body='{"result_md":"# Result\n\nSmoke test result.","evidence":{"smoke_test":"pass","commands":["echo done"]},"status":"ready_for_review"}'
+  complete_body='{"result_md":"# Smoke Result\n\nThe worker completed the smoke task. A result exists with passing evidence.","evidence":{"smoke_test":"pass","commands":["echo done"]},"status":"ready_for_review"}'
   complete_resp=$(request_agent POST "/v1/projects/$project_id/orchestrations/$orch_id/tasks/$task_id/complete" "$complete_body" "$worker_agent_api_key")
   complete_status=$(printf '%s' "$complete_resp" | json_get status)
   assert_eq "complete status" "$complete_status" "ready_for_review"
