@@ -644,6 +644,17 @@ async function upsertFileInTransaction(
   targetFile.updatedBy = userId;
   await fileRepo.save(targetFile);
 
+  // Mirror the direct write into the real-git index so the working tree stays
+  // consistent with the DB (the git backend is authoritative for branch
+  // snapshots via gitListTreeFiles). Best-effort: failures never affect the
+  // transaction. The staged change is committed on the next changeset merge.
+  try {
+    const { gitAddFile } = await import('../services/project-git.service');
+    await gitAddFile(projectId, path, content);
+  } catch (gitErr) {
+    console.error('Git add mirror failed (DB write succeeded):', gitErr);
+  }
+
   return { file: targetFile, revision, created: !file };
 }
 
