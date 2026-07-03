@@ -1789,6 +1789,14 @@
       // ── Init ──
       function init() {
         loadConfig();
+        // Without a jwt the page cannot call any API and would render a dead-end
+        // "Sign in required" state. Redirect to the dashboard login instead,
+        // carrying a return URL so the user lands back here after authenticating.
+        if (!state.jwt) {
+          var ret = window.location.pathname + window.location.search;
+          window.location.replace("index.html?return=" + encodeURIComponent(ret));
+          return;
+        }
         wireEvents();
         renderCrosslinks();
         loadProject();
