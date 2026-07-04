@@ -483,6 +483,68 @@ router.patch(
 );
 
 /**
+ * PATCH /v1/agents/:aid/capabilities
+ * Add or remove capabilities on an agent. Idempotent.
+ * Auth: user JWT or agent API key.
+ */
+router.patch(
+  '/v1/agents/:aid/capabilities',
+  authenticateJwtOrAgentApiKey,
+  attachAgentProject,
+  async (req: Request, res: Response) => {
+    try {
+      if (req.agent && req.agent.id !== req.params.aid) {
+        res.status(403).json({ detail: 'Agent token cannot modify another agent' });
+        return;
+      }
+
+      const agent = (req as any).loadedAgent as Agent;
+      const { add, remove } = req.body;
+
+      const current = normalizeCapabilities(agent.capabilities);
+      let updated = [...current];
+
+      if (Array.isArray(add)) {
+        for (const item of add) {
+          if (typeof item !== 'string' || item.trim().length === 0 || item.trim().length > 50) {
+            res.status(422).json({ detail: 'Each capability must be a non-empty string of at most 50 characters' });
+            return;
+          }
+        }
+        const toAdd = normalizeCapabilities(add);
+        for (const cap of toAdd) {
+          if (!updated.includes(cap)) updated.push(cap);
+        }
+      }
+
+      if (Array.isArray(remove)) {
+        for (const item of remove) {
+          if (typeof item !== 'string' || item.trim().length === 0 || item.trim().length > 50) {
+            res.status(422).json({ detail: 'Each capability must be a non-empty string of at most 50 characters' });
+            return;
+          }
+        }
+        const toRemove = new Set(normalizeCapabilities(remove));
+        updated = updated.filter((c) => !toRemove.has(c));
+      }
+
+      if (updated.length > 20) {
+        res.status(422).json({ detail: 'Cannot exceed 20 capabilities total' });
+        return;
+      }
+
+      agent.capabilities = updated;
+      await agentRepo.save(agent);
+
+      res.json({ capabilities: updated });
+    } catch (err) {
+      console.error('Patch agent capabilities error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  }
+);
+
+/**
  * DELETE /v1/agents/:aid
  * V1 delete is a soft delete: mark inactive, do not remove the row.
  */

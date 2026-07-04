@@ -256,6 +256,24 @@ router.get(
   },
 );
 
+// ── R19c: per-worker current load ───────────────────────────────────────────
+router.get(
+  '/v1/projects/:project_id/worker-load',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const workers = await buildWorkerLoad(projectId);
+      res.json({ data: workers });
+    } catch (err) {
+      console.error('Get worker load error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
 // ── R16c: project loop throughput summary ───────────────────────────────────
 router.get(
   '/v1/projects/:project_id/metrics',
@@ -3664,6 +3682,76 @@ async function buildLoopStatus(projectId: string) {
       completed: orchestrations.filter((o) => completedOrchestrationStatuses.includes(o.status)).length,
     },
   };
+}
+
+/**
+ * Build per-worker load payload for GET /v1/projects/:project_id/worker-load.
+ *
+ * Each project agent gets a row with its presence/health, current running task
+ * count, pending (non-terminal) changeset count, the last time it completed a
+ * task, and a utilization score based on its configured max_concurrent
+ * capacity (default 3).
+ */
+async function buildWorkerLoad(projectId: string) {
+  const now = Date.now();
+
+  const [agents, tasks, changesets] = await Promise.all([
+    AppDataSource.getRepository(Agent).find({
+      where: { projectId },
+      order: { name: 'ASC' },
+    }),
+    AppDataSource.getRepository(ProjectOrchestrationTask).find({
+      where: { projectId },
+    }),
+    AppDataSource.getRepository(ProjectChangeset).find({
+      where: { projectId },
+    }),
+  ]);
+
+  const terminalChangesetStatuses = [
+    ProjectChangesetStatus.MERGED,
+    ProjectChangesetStatus.REJECTED,
+    ProjectChangesetStatus.CANCELLED,
+  ];
+
+  return agents.map((agent) => {
+    const presence = getAgentPresence(agent, now);
+    const agentTasks = tasks.filter((task) => task.assignedAgentId === agent.id);
+    const runningTasks = agentTasks.filter(
+      (task) => task.status === ProjectOrchestrationTaskStatus.RUNNING,
+    ).length;
+    const pendingChangesets = changesets.filter(
+      (cs) => cs.createdByAgentId === agent.id && !terminalChangesetStatuses.includes(cs.status),
+    ).length;
+    const lastCompletedTask = agentTasks
+      .filter((task) => task.completedAt !== null && task.completedAt !== undefined)
+      .sort((a, b) => b.completedAt!.getTime() - a.completedAt!.getTime())[0];
+    const maxConcurrent = getAgentMaxConcurrent(agent);
+    const utilizationScore = maxConcurrent > 0 ? Math.round((runningTasks / maxConcurrent) * 100) / 100 : 0;
+
+    return {
+      agent_id: agent.id,
+      agent_name: agent.name,
+      online: presence.isOnline,
+      health_status: presence.healthStatus,
+      running_tasks: runningTasks,
+      pending_changesets: pendingChangesets,
+      last_task_completed_at: lastCompletedTask?.completedAt?.toISOString() ?? null,
+      utilization_score: utilizationScore,
+    };
+  });
+}
+
+function getAgentMaxConcurrent(agent: Agent): number {
+  const configValue = agent.configJson?.max_concurrent;
+  if (typeof configValue === 'number' && Number.isFinite(configValue) && configValue > 0) {
+    return configValue;
+  }
+  if (typeof configValue === 'string') {
+    const parsed = Number(configValue);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 3;
 }
 
 function computeAverageDurationMinutes(
