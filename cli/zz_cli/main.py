@@ -460,6 +460,10 @@ def init(
     password: Optional[str] = typer.Option(None, "--password", "-p", help="Account password"),
     project_name: Optional[str] = typer.Option(None, "--project", help="Project name to create"),
     agent_name: Optional[str] = typer.Option(None, "--agent", help="Agent name to register"),
+    capabilities: Optional[str] = typer.Option(
+        None, "--capabilities",
+        help="Comma-separated agent capabilities, e.g. 'code,docs,analysis'. If omitted, prompted interactively."
+    ),
 ) -> None:
     """Guided first-time setup: connect to a platform, log in, create a project
     and an agent, then print how to keep the executor running.
@@ -564,7 +568,14 @@ def init(
     agent_key: Optional[str] = None
     if create_agent and pid:
         aname = agent_name or typer.prompt("Agent name", default="my-worker")
-        status, body = _init_http("POST", url, f"/v1/projects/{pid}/agents", {"name": aname}, token=token)
+        caps_str = capabilities or typer.prompt(
+            "Capabilities (comma-separated, e.g. code,docs,chat)", default="code"
+        )
+        caps = [c.strip() for c in caps_str.split(",") if c.strip()]
+        agent_body: dict[str, Any] = {"name": aname}
+        if caps:
+            agent_body["capabilities"] = caps
+        status, body = _init_http("POST", url, f"/v1/projects/{pid}/agents", agent_body, token=token)
         if status in (200, 201):
             agent_key = body.get("api_key")
             console.print(f"  [green]✓[/green] Agent: {aname} ({body.get('id')})")
