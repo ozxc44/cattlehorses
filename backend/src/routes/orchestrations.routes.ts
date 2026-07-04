@@ -292,6 +292,7 @@ router.post(
           dependsOn: normalizeStringArray(req.body.depends_on),
           requiredCapability: normalizeCapability(req.body.required_capability),
           priority: normalizeTaskPriority(req.body.priority),
+          maxRetries: normalizeTaskRetryLimit(req.body.max_retries),
           createdByUserId: actor.userId,
           createdByAgentId: actor.agentId,
           dispatchedAt: isDispatched ? new Date() : undefined,
@@ -345,77 +346,13 @@ router.post(
       });
 
       if (task.status === ProjectOrchestrationTaskStatus.DISPATCHED) {
-        // Ensure the assigned worker is a session participant so the platform can
-        // invoke its endpoint (dispatchService only invokes participant agents).
-        // Without this, a task dispatched to an agent that wasn't in the session
-        // at orchestration-creation time is never invoked — it sits in 'dispatched'
-        // forever even with a valid endpoint_url. (the root cause of "agent won't
-        // respond to dispatched tasks".)
-        if (task.assignedAgentId && orchestration.sessionId) {
-          const partRepo = AppDataSource.getRepository(SessionParticipant);
-          const existing = await partRepo.findOne({
-            where: { sessionId: orchestration.sessionId, agentId: task.assignedAgentId },
-          });
-          if (!existing) {
-            await partRepo.save(partRepo.create({
-              sessionId: orchestration.sessionId,
-              agentId: task.assignedAgentId,
-            }));
-          }
-        }
-
-        await notifyAgentInSession({
+        await dispatchTaskToAssignedAgent({
           projectId,
-          sessionId: orchestration.sessionId ?? null,
+          orchestration,
+          task,
           actorId: actor.actorId,
-          recipientAgentId: task.assignedAgentId ?? null,
-          content: [
-            `Task dispatched: ${task.title}`,
-            '',
-            `Task ID: ${task.id}`,
-            `Task file: ${task.workerTaskPath}`,
-            `Context file: ${task.workerContextPath}`,
-            '',
-            'Read the task/context markdown, complete the work, then call the complete endpoint with result_md and evidence.',
-          ].join('\n'),
-          idempotencyKey: `orchestration:${orchestration.id}:task:${task.id}:dispatch`,
+          retry: false,
         });
-
-        // Durable inbox: notify assigned worker agent
-        if (task.assignedAgentId) {
-          await createInboxItem({
-            projectId,
-            recipientAgentId: task.assignedAgentId,
-            eventType: 'task_dispatched',
-            title: `Task dispatched: ${task.title}`,
-            body: [
-              `Task ID: ${task.id}`,
-              `Goal: ${task.goal}`,
-              '',
-              '## Execution Steps (follow these to complete this task)',
-              '',
-              '1. **Acknowledge**: POST /v1/agent/inbox/<this_inbox_id>/ack',
-              '2. **Claim**: PATCH /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id>/claim',
-              '3. **Read context**: GET /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id> (read goal, acceptance_criteria, worker_context_path)',
-              '4. **Understand the codebase**: If .agent/code-map.md exists, it is already in your context. Use GET /v1/projects/<project_id>/repository/search?q=<keywords> to find relevant code.',
-              '5. **Do the work**: Implement the goal. Use your own capabilities (LLM, code generation, analysis, etc.).',
-              '6. **Submit result**: POST /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id>/complete with body: {"result_md": "# Your result\\n...", "evidence": {<key-value evidence>}, "status": "ready_for_review"}',
-              '7. **If changes requested**: You will receive a task_changes_requested notification. Fix the issues and re-submit via the same complete endpoint.',
-              '',
-              '## Quick CLI Commands',
-              '```bash',
-              `zz agent inbox           # see this task`,
-              `zz tasks claim -p <project_id> -o <orch_id> <task_id>`,
-              `zz agent submit --result @./result.md   # submit when done`,
-              '```',
-              '',
-              '## Full Guide',
-              'GET /v1/agent/execution-guide for the complete agent execution workflow.',
-            ].join('\n'),
-            orchestrationId: orchestration.id,
-            taskId: task.id,
-          });
-        }
       }
 
       res.status(201).json(serializeTask(task));
@@ -868,7 +805,7 @@ router.post(
       const safeResultMd = redactMarkdown(resultMd);
       const safeEvidence = redactValue(evidence) as Record<string, unknown>;
 
-      const updated = await AppDataSource.transaction(async (manager) => {
+      const completion = await AppDataSource.transaction(async (manager) => {
         const resultPath = `${task.orchestration.basePath}/workers/${task.id}.result.md`;
         const evidencePath = `${task.orchestration.basePath}/workers/${task.id}.evidence.json`;
 
@@ -912,6 +849,43 @@ router.post(
           evidence: evMdPath,
           changelog: chgMdPath,
         });
+
+        if (
+          nextStatus === ProjectOrchestrationTaskStatus.FAILED &&
+          (task.retryCount ?? 0) < (task.maxRetries ?? 2)
+        ) {
+          task.retryCount = (task.retryCount ?? 0) + 1;
+          task.status = ProjectOrchestrationTaskStatus.DISPATCHED;
+          task.completedAt = undefined;
+          task.reviewNotes = null;
+          task.requestedChanges = null;
+          task.reviewedAt = undefined;
+          task.progressNote = null;
+          task.progressPercent = null;
+          task.progressAt = null;
+          task.dispatchedAt = new Date();
+          task.metadata = {
+            ...(task.metadata ?? {}),
+            last_retry_at: task.dispatchedAt.toISOString(),
+            last_retry_reason: 'worker reported failed',
+          };
+          await manager.save(ProjectOrchestrationTask, task);
+
+          if (
+            task.orchestration.status === ProjectOrchestrationStatus.PLANNING ||
+            task.orchestration.status === ProjectOrchestrationStatus.BLOCKED ||
+            task.orchestration.status === ProjectOrchestrationStatus.FAILED
+          ) {
+            task.orchestration.status = ProjectOrchestrationStatus.RUNNING;
+            await manager.save(ProjectOrchestration, task.orchestration);
+          }
+          await refreshTaskLedger(manager, task.orchestration, actor.actorId);
+          console.log(
+            `Retrying failed task ${task.id}: retry_count=${task.retryCount}, max_retries=${task.maxRetries ?? 2}`,
+          );
+          return { task, retried: true };
+        }
+
         await manager.save(ProjectOrchestrationTask, task);
 
         if (nextStatus === ProjectOrchestrationTaskStatus.BLOCKED) {
@@ -950,8 +924,21 @@ router.post(
           }
         }
 
-        return task;
+        return { task, retried: false };
       });
+
+      const updated = completion.task;
+      if (completion.retried) {
+        await dispatchTaskToAssignedAgent({
+          projectId,
+          orchestration: updated.orchestration,
+          task: updated,
+          actorId: actor.actorId,
+          retry: true,
+        });
+        res.json(serializeTask(updated));
+        return;
+      }
 
       await notifyAgentInSession({
         projectId,
@@ -1546,6 +1533,89 @@ async function upsertProjectFile(manager: EntityManager, input: ProjectFileUpser
   return file;
 }
 
+async function dispatchTaskToAssignedAgent(input: {
+  projectId: string;
+  orchestration: ProjectOrchestration;
+  task: ProjectOrchestrationTask;
+  actorId: string;
+  retry: boolean;
+}): Promise<void> {
+  const { projectId, orchestration, task, actorId, retry } = input;
+
+  // Ensure the assigned worker is a session participant so the platform can
+  // invoke its endpoint; dispatchService only invokes participant agents.
+  if (task.assignedAgentId && orchestration.sessionId) {
+    const partRepo = AppDataSource.getRepository(SessionParticipant);
+    const existing = await partRepo.findOne({
+      where: { sessionId: orchestration.sessionId, agentId: task.assignedAgentId },
+    });
+    if (!existing) {
+      await partRepo.save(partRepo.create({
+        sessionId: orchestration.sessionId,
+        agentId: task.assignedAgentId,
+      }));
+    }
+  }
+
+  const retrySuffix = retry ? ` (retry ${task.retryCount ?? 0}/${task.maxRetries ?? 2})` : '';
+  await notifyAgentInSession({
+    projectId,
+    sessionId: orchestration.sessionId ?? null,
+    actorId,
+    recipientAgentId: task.assignedAgentId ?? null,
+    content: [
+      retry ? `Task retry dispatched: ${task.title}` : `Task dispatched: ${task.title}`,
+      '',
+      `Task ID: ${task.id}`,
+      `Task file: ${task.workerTaskPath}`,
+      `Context file: ${task.workerContextPath}`,
+      retry ? `Retry: ${task.retryCount ?? 0}/${task.maxRetries ?? 2}` : null,
+      '',
+      'Read the task/context markdown, complete the work, then call the complete endpoint with result_md and evidence.',
+    ].filter(Boolean).join('\n'),
+    idempotencyKey: retry
+      ? `orchestration:${orchestration.id}:task:${task.id}:retry:${task.retryCount ?? 0}`
+      : `orchestration:${orchestration.id}:task:${task.id}:dispatch`,
+  });
+
+  if (!task.assignedAgentId) return;
+  await createInboxItem({
+    projectId,
+    recipientAgentId: task.assignedAgentId,
+    eventType: 'task_dispatched',
+    title: `${retry ? 'Task retry dispatched' : 'Task dispatched'}: ${task.title}`,
+    body: [
+      `Task ID: ${task.id}${retrySuffix}`,
+      `Goal: ${task.goal}`,
+      '',
+      '## Execution Steps (follow these to complete this task)',
+      '',
+      '1. **Acknowledge**: POST /v1/agent/inbox/<this_inbox_id>/ack',
+      '2. **Claim**: PATCH /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id>/claim',
+      '3. **Read context**: GET /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id> (read goal, acceptance_criteria, worker_context_path)',
+      '4. **Understand the codebase**: If .agent/code-map.md exists, it is already in your context. Use GET /v1/projects/<project_id>/repository/search?q=<keywords> to find relevant code.',
+      '5. **Do the work**: Implement the goal. Use your own capabilities (LLM, code generation, analysis, etc.).',
+      '6. **Submit result**: POST /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id>/complete with body: {"result_md": "# Your result\\n...", "evidence": {<key-value evidence>}, "status": "ready_for_review"}',
+      '7. **If changes requested**: You will receive a task_changes_requested notification. Fix the issues and re-submit via the same complete endpoint.',
+      '',
+      '## Quick CLI Commands',
+      '```bash',
+      `zz agent inbox           # see this task`,
+      `zz tasks claim -p <project_id> -o <orch_id> <task_id>`,
+      `zz agent submit --result @./result.md   # submit when done`,
+      '```',
+      '',
+      '## Full Guide',
+      'GET /v1/agent/execution-guide for the complete agent execution workflow.',
+    ].join('\n'),
+    orchestrationId: orchestration.id,
+    taskId: task.id,
+    payload: retry
+      ? { retry_count: task.retryCount ?? 0, max_retries: task.maxRetries ?? 2 }
+      : null,
+  });
+}
+
 async function refreshTaskLedger(
   manager: EntityManager,
   orchestration: ProjectOrchestration,
@@ -2076,6 +2146,8 @@ function serializeTask(task: ProjectOrchestrationTask) {
     depends_on: task.dependsOn ?? [],
     required_capability: task.requiredCapability ?? null,
     priority: task.priority ?? 0,
+    retry_count: task.retryCount ?? 0,
+    max_retries: task.maxRetries ?? 2,
     progress_note: task.progressNote ?? null,
     progress_percent: task.progressPercent ?? null,
     progress_at: task.progressAt ?? null,
@@ -2110,6 +2182,8 @@ function serializeTaskLedgerItem(task: ProjectOrchestrationTask) {
     depends_on: task.dependsOn ?? [],
     required_capability: task.requiredCapability ?? null,
     priority: task.priority ?? 0,
+    retry_count: task.retryCount ?? 0,
+    max_retries: task.maxRetries ?? 2,
     progress_note: task.progressNote ?? null,
     progress_percent: task.progressPercent ?? null,
     progress_at: task.progressAt ?? null,
@@ -2745,6 +2819,16 @@ function normalizeTaskPriority(value: unknown): number {
       ? Number(value)
       : 0;
   if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.trunc(parsed));
+}
+
+function normalizeTaskRetryLimit(value: unknown): number {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim()
+      ? Number(value)
+      : 2;
+  if (!Number.isFinite(parsed)) return 2;
   return Math.max(0, Math.trunc(parsed));
 }
 

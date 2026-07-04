@@ -389,6 +389,8 @@ router.get(
           worker_context_path: t.workerContextPath,
           acceptance_criteria: t.acceptanceCriteria ?? [],
           priority: t.priority ?? 0,
+          retry_count: t.retryCount ?? 0,
+          max_retries: t.maxRetries ?? 2,
           review_notes: t.reviewNotes ?? null,
           requested_changes: t.requestedChanges ?? null,
           dispatched_at: t.dispatchedAt ?? null,

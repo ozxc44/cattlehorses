@@ -86,6 +86,12 @@ export class ProjectOrchestrationTask {
   @Column({ type: 'integer', default: 0 })
   priority!: number;
 
+  @Column({ name: 'retry_count', type: 'integer', default: 0 })
+  retryCount!: number;
+
+  @Column({ name: 'max_retries', type: 'integer', default: 2 })
+  maxRetries!: number;
+
   @Column({ name: 'progress_note', type: 'text', nullable: true })
   progressNote?: string | null;
 
