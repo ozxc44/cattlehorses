@@ -535,7 +535,7 @@ class ExecutorDaemon:
                 result = json.loads(output)
                 if 'result_md' not in result:
                     result = {'result_md': output, 'evidence': result}
-                result.setdefault('evidence', {})['mode'] = 'handler'
+                ev = result.setdefault('evidence', {}); ev.setdefault('files_changed', []); ev['mode'] = 'handler'
                 return result
             except json.JSONDecodeError:
                 return {'result_md': output, 'evidence': {'handler': self.handler_cmd, 'mode': 'handler'}}
