@@ -17,8 +17,9 @@
 | 能力 | 说明 |
 |------|------|
 | 🤖 **统一本地模型 runtime** | 一个进程服务一台机器上**所有**本地模型（kimi/mimo/codex/claude/hermes），按 agent 身份精确路由。`--discover` 一键发现并接入每个模型，每个模型一个独立 agent 身份。 |
-| 📋 **PM/worker 编排** | 主 agent 拆解目标为任务、派发给 worker、worker 提交结果、PM 审核验收（类 GitHub PR 流程）。 |
-| ⚡ **多 agent 并行派活** | 一个 orchestration 含多个 worker，无依赖的任务天然并行、有依赖的串行；任务优先级调度 + 依赖门控 + 完成验证门禁。详见 [多 agent 并行派活](docs/multi-agent-parallel.md)。 |
+| 📋 **PM/worker 编排** | 主 agent 拆解目标为任务、派发给 worker、worker 提交结果 + 结构化 evidence、PM executor **自动审核 + merge**（无需人工）。 |
+| ⚡ **多 agent 并行派活** | 一个 orchestration 含多个 worker，无依赖的任务天然并行、有依赖的串行；任务优先级调度 + 依赖门控 + 验证门禁 + 自动重试 + 进度追踪 + 代码变更检测。详见 [多 agent 并行派活](docs/multi-agent-parallel.md)。 |
+| 🤖 **PM executor 自驱动** | PM executor daemon 自动轮询 inbox → review → merge，**事件驱动不轮询**。worker 完成后平台通知 PM，PM executor 30s 内自动处理。 |
 | 🌳 **真实 Git 后端** | 基于 isomorphic-git 的真版本控制（不是数据库模拟），支持分支/合并/历史，可对接 Gitea/Forgejo。 |
 | 📝 **MD 驱动工作流** | `goal.md → TASK.md → RESULT.md → REVIEW.md`——人机可读的协作契约。 |
 | 🔒 **私有部署** | 数据不出内网。企业可自托管，对抗 Devin/Azure 的数据出境问题。 |
@@ -49,17 +50,25 @@ zz init --base-url http://<your-platform-host>:18080/agent
 
 ### 3. 让 agent 真正执行任务（executor）
 
-把 executor 脚本拷到装模型的机器上,生成保活配置(launchd/systemd),agent 就会自动轮询平台领活、调用本地 CLI 执行、回传结果:
+把 executor 脚本拷到装模型的机器上,生成保活配置(launchd/systemd),agent 就会自动轮询平台领活、调用本地 CLI 执行、检测代码改动并回传:
 
 ```bash
 # 见 deploy/nas/agent-executors/README.md 完整指南
 cp deploy/nas/agent-executors/*.py ~/.zz-agent/
 ./deploy/nas/agent-executors/generate-executor-config.sh kimi \
     --base-url http://<your-platform-host>:18080/agent \
-    --key zzk_<your-agent-key> --install
+    --key zzk_<your-agent-key> \
+    --project-dir /tmp/zz-workspace \
+    --install
 ```
 
-支持 codex / kimi / mimo,也可接入任意 CLI(claude/gemini/自定义脚本)。
+支持 codex / kimi / mimo / claude，也可接入任意 CLI（gemini/aider/自定义脚本）。
+
+> **macOS ⚠️ 工作目录不能在 `~/Documents` 下**：
+> macOS TCC 会阻止 launchd 进程访问 Documents 文件夹。executor 的工作目录（`--project-dir`）
+> 必须设在 TCC 保护范围外，如 `/tmp/zz-workspace` 或 `~/cattlehorses-workspace`。
+> 同时需要给 agent CLI 和 Python 二进制一次性 Full Disk Access 授权（`generate-executor-config.sh` 会引导）。
+> 详见 [PM 工作模式](docs/pm-workflow.md) 和 [executor README](deploy/nas/agent-executors/README.md)。
 
 ### 4. PM 派活，模型干活
 
