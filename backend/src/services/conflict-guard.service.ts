@@ -84,7 +84,5 @@ function extractWriteSet(task: ProjectOrchestrationTask): string[] {
  */
 export async function declareWriteSet(taskId: string, writeSet: string[]): Promise<void> {
   const taskRepo = AppDataSource.getRepository(ProjectOrchestrationTask);
-  await taskRepo.update(taskId, {
-    metadata: { write_set: writeSet },
-  } as Partial<ProjectOrchestrationTask>);
+  await taskRepo.update(taskId, { metadata: JSON.stringify({ write_set: writeSet }) } as any);
 }
