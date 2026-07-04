@@ -424,9 +424,32 @@ class ExecutorDaemon:
         return self.api('GET', f'/v1/projects/{pid}/orchestrations/{oid}/tasks/{tid}')
 
     def submit_task(self, pid, oid, tid, result_md, evidence=None):
-        return self.api('POST', f'/v1/projects/{pid}/orchestrations/{oid}/tasks/{tid}/complete', {
-            'result_md': result_md, 'evidence': evidence or {'files_changed': []}, 'status': 'ready_for_review',
-        })
+        body = {
+            'result_md': result_md,
+            'evidence': self._heal_evidence(evidence),
+            'status': 'ready_for_review',
+        }
+        r = self.api('POST', f'/v1/projects/{pid}/orchestrations/{oid}/tasks/{tid}/complete', body)
+        if r.get('_error') == 422 and 'files_changed' in str(r.get('detail', '')):
+            print(f"  [executor] evidence auto-heal: fixing files_changed and retrying", flush=True)
+            body['evidence'] = self._heal_evidence(body['evidence'], force=True)
+            r = self.api('POST', f'/v1/projects/{pid}/orchestrations/{oid}/tasks/{tid}/complete', body)
+            if not r.get('_error'):
+                print(f"  [executor] auto-heal succeeded on retry", flush=True)
+        return r
+
+    def _heal_evidence(self, evidence, force=False):
+        if evidence is None:
+            evidence = {}
+        if not isinstance(evidence, dict):
+            evidence = {}
+        if force or 'files_changed' not in evidence:
+            evidence['files_changed'] = evidence.get('files_changed') or []
+        if not isinstance(evidence.get('files_changed'), list):
+            evidence['files_changed'] = []
+        if 'test_passed' not in evidence:
+            evidence['test_passed'] = None
+        return evidence
 
     def detect_code_changes(self):
         """Detect uncommitted file changes in the working directory.
