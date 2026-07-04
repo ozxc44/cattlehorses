@@ -830,7 +830,20 @@ class ExecutorDaemon:
         cs_id = self.find_changeset_for_task(pid, tid)
         if cs_id:
             print(f"  → reviewing changeset {cs_id[:12]}", flush=True)
-            self.review_changeset(pid, cs_id, 'approved', 'Auto-approved by PM executor')
+
+            # Quality gate: verify code compiles before merge
+            build_ok = self.verify_build()
+            if not build_ok:
+                print(f"  ❌ build failed — changeset rejected (not merged)", flush=True)
+                self.review_changeset(pid, cs_id, 'changes_requested',
+                    'Build failed — PM executor quality gate blocked merge. Fix compilation errors.')
+                if oid:
+                    self.review_task(pid, oid, tid, 'changes_requested',
+                        'Build failed — fix compilation errors and resubmit.')
+                    print(f"  ✓ task sent back to worker (changes_requested)", flush=True)
+                return True
+
+            self.review_changeset(pid, cs_id, 'approved', 'Auto-approved by PM executor (build passed)')
             print(f"  ✓ changeset approved", flush=True)
             merge = self.merge_changeset(pid, cs_id)
             if merge.get('commit'):
