@@ -49,7 +49,7 @@ def test_doctor_reports_all_checks_healthy(
         timeout: float = 8.0,
     ) -> tuple[int, Any]:
         assert base_url == "http://platform.test/agent"
-        if path == "/v1/health":
+        if path == "/health":
             return 200, {"status": "healthy"}
         if path == "/v1/agent/projects":
             assert api_key == SECRET_KEY
@@ -115,7 +115,7 @@ def test_doctor_degrades_without_agent_credentials(
         timeout: float = 8.0,
     ) -> tuple[int, Any]:
         assert api_key is None
-        assert path == "/v1/health"
+        assert path == "/health"
         return 200, {"status": "healthy"}
 
     monkeypatch.setattr(zz_main, "_doctor_http_json", fake_http)

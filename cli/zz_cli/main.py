@@ -2020,7 +2020,7 @@ def _doctor_find_executor_processes() -> list[tuple[str, str]]:
 
 
 def _doctor_check_platform(base_url: str) -> tuple[bool, str]:
-    paths = ["/v1/health", "/health"]
+    paths = ["/health", "/v1/health"]
     last_detail = ""
     for path in paths:
         try:
