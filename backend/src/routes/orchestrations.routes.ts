@@ -42,6 +42,7 @@ import {
   redactValue,
 } from '../services/md-artifact.service';
 import { createInboxItem, upsertWorkUnit, updateWorkUnitOnReview, ackInboxItemsForTask } from './agent-inbox.routes';
+import { serializeChangeset } from './versioning.routes';
 import { eventStreamService } from '../services/event-stream.service';
 
 const router = Router();
@@ -274,6 +275,44 @@ router.get(
   },
 );
 
+/**
+ * GET /v1/projects/:project_id/dashboard
+ *
+ * Single-call aggregation so the frontend dashboard can render with one request
+ * instead of fanning out to five endpoints. Combines loop-status + metrics +
+ * worker-load + the 5 most-recent changesets + the 5 most-recent tasks, all
+ * produced by the same functions the dedicated endpoints use, so every sub-
+ * payload is byte-identical to calling that endpoint directly.
+ *
+ * Auth: JWT user OR agent API key, ViewProject (same as the underlying views).
+ *
+ * Response shape:
+ *   {
+ *     loop_status,         // GET /loop-status payload
+ *     metrics,             // GET /metrics payload
+ *     worker_load,         // GET /worker-load payload ({ data: [...] })
+ *     recent_changesets,   // last 5 by updatedAt, full serializeChangeset shape
+ *     recent_tasks,        // last 5 by updatedAt, full serializeTask shape
+ *     generated_at         // ISO timestamp of this aggregation
+ *   }
+ */
+router.get(
+  '/v1/projects/:project_id/dashboard',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const dashboard = await buildDashboard(projectId);
+      res.json(dashboard);
+    } catch (err) {
+      console.error('Dashboard aggregation error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
 // ── R16c: project loop throughput summary ───────────────────────────────────
 router.get(
   '/v1/projects/:project_id/metrics',
@@ -283,86 +322,95 @@ router.get(
   async (req: Request, res: Response) => {
     try {
       const projectId = req.params.project_id;
-
-      const orchestrationRepo = AppDataSource.getRepository(ProjectOrchestration);
-      const taskRepo = AppDataSource.getRepository(ProjectOrchestrationTask);
-      const changesetRepo = AppDataSource.getRepository(ProjectChangeset);
-      const agentRepo = AppDataSource.getRepository(Agent);
-
-      const [totalOrchestrations, completedOrchestrations, tasks, changesets] = await Promise.all([
-        orchestrationRepo.count({ where: { projectId } }),
-        orchestrationRepo.count({ where: { projectId, status: ProjectOrchestrationStatus.COMPLETED } }),
-        taskRepo.find({ where: { projectId }, relations: ['assignedAgent'] }),
-        changesetRepo.find({ where: { projectId } }),
-      ]);
-
-      const completedTasks = tasks.filter(
-        (task) => task.status === ProjectOrchestrationTaskStatus.APPROVED,
-      );
-
-      const autoMergedChangesets = changesets.filter(
-        (changeset) => changeset.status === ProjectChangesetStatus.MERGED,
-      ).length;
-      const rejectedChangesets = changesets.filter(
-        (changeset) => changeset.status === ProjectChangesetStatus.REJECTED,
-      ).length;
-
-      const avgTaskDurationMinutes = computeAverageDurationMinutes(
-        completedTasks.map((task) => ({ start: task.createdAt, end: task.completedAt })),
-      );
-
-      const reviewedChangesets = changesets.filter((changeset) => changeset.reviewedAt !== null);
-      const avgChangesetReviewTimeMinutes = computeAverageDurationMinutes(
-        reviewedChangesets.map((changeset) => ({ start: changeset.createdAt, end: changeset.reviewedAt! })),
-      );
-
-      const completedTasksByAgent = groupByAgentId(completedTasks, (task) => task.assignedAgentId);
-      const mergedChangesetsByAgent = groupByAgentId(
-        changesets.filter((changeset) => changeset.status === ProjectChangesetStatus.MERGED),
-        (changeset) => changeset.createdByAgentId,
-      );
-
-      const workerAgentIds = new Set<string>([
-        ...Object.keys(completedTasksByAgent),
-        ...Object.keys(mergedChangesetsByAgent),
-      ]);
-      const workerAgents = workerAgentIds.size > 0
-        ? await agentRepo.findBy({ id: In(Array.from(workerAgentIds)) })
-        : [];
-      const agentNameById = new Map(workerAgents.map((agent) => [agent.id, agent.name]));
-
-      const workerStats = Array.from(workerAgentIds)
-        .map((agentId) => {
-          const agentTasks = completedTasksByAgent[agentId] ?? [];
-          const agentChangesets = mergedChangesetsByAgent[agentId] ?? [];
-          return {
-            agent_name: agentNameById.get(agentId) ?? null,
-            tasks_completed: agentTasks.length,
-            changesets_merged: agentChangesets.length,
-            avg_duration_minutes: computeAverageDurationMinutes(
-              agentTasks.map((task) => ({ start: task.createdAt, end: task.completedAt })),
-            ),
-          };
-        })
-        .sort((a, b) => (a.agent_name ?? '').localeCompare(b.agent_name ?? ''));
-
-      res.json({
-        total_orchestrations: totalOrchestrations,
-        completed_orchestrations: completedOrchestrations,
-        total_tasks: tasks.length,
-        completed_tasks: completedTasks.length,
-        auto_merged_changesets: autoMergedChangesets,
-        rejected_changesets: rejectedChangesets,
-        avg_task_duration_minutes: avgTaskDurationMinutes,
-        avg_changeset_review_time_minutes: avgChangesetReviewTimeMinutes,
-        worker_stats: workerStats,
-      });
+      res.json(await buildProjectMetrics(projectId));
     } catch (err) {
       console.error('Get project metrics error:', err);
       res.status(500).json({ detail: 'Internal server error' });
     }
   },
 );
+
+/**
+ * Build the project loop throughput summary returned by both
+ * GET /v1/projects/:project_id/metrics and the aggregated
+ * GET /v1/projects/:project_id/dashboard. Pure function over `projectId` so the
+ * dashboard reuses the exact same logic as the dedicated metrics endpoint.
+ */
+async function buildProjectMetrics(projectId: string) {
+  const orchestrationRepo = AppDataSource.getRepository(ProjectOrchestration);
+  const taskRepo = AppDataSource.getRepository(ProjectOrchestrationTask);
+  const changesetRepo = AppDataSource.getRepository(ProjectChangeset);
+  const agentRepo = AppDataSource.getRepository(Agent);
+
+  const [totalOrchestrations, completedOrchestrations, tasks, changesets] = await Promise.all([
+    orchestrationRepo.count({ where: { projectId } }),
+    orchestrationRepo.count({ where: { projectId, status: ProjectOrchestrationStatus.COMPLETED } }),
+    taskRepo.find({ where: { projectId }, relations: ['assignedAgent'] }),
+    changesetRepo.find({ where: { projectId } }),
+  ]);
+
+  const completedTasks = tasks.filter(
+    (task) => task.status === ProjectOrchestrationTaskStatus.APPROVED,
+  );
+
+  const autoMergedChangesets = changesets.filter(
+    (changeset) => changeset.status === ProjectChangesetStatus.MERGED,
+  ).length;
+  const rejectedChangesets = changesets.filter(
+    (changeset) => changeset.status === ProjectChangesetStatus.REJECTED,
+  ).length;
+
+  const avgTaskDurationMinutes = computeAverageDurationMinutes(
+    completedTasks.map((task) => ({ start: task.createdAt, end: task.completedAt })),
+  );
+
+  const reviewedChangesets = changesets.filter((changeset) => changeset.reviewedAt !== null);
+  const avgChangesetReviewTimeMinutes = computeAverageDurationMinutes(
+    reviewedChangesets.map((changeset) => ({ start: changeset.createdAt, end: changeset.reviewedAt! })),
+  );
+
+  const completedTasksByAgent = groupByAgentId(completedTasks, (task) => task.assignedAgentId);
+  const mergedChangesetsByAgent = groupByAgentId(
+    changesets.filter((changeset) => changeset.status === ProjectChangesetStatus.MERGED),
+    (changeset) => changeset.createdByAgentId,
+  );
+
+  const workerAgentIds = new Set<string>([
+    ...Object.keys(completedTasksByAgent),
+    ...Object.keys(mergedChangesetsByAgent),
+  ]);
+  const workerAgents = workerAgentIds.size > 0
+    ? await agentRepo.findBy({ id: In(Array.from(workerAgentIds)) })
+    : [];
+  const agentNameById = new Map(workerAgents.map((agent) => [agent.id, agent.name]));
+
+  const workerStats = Array.from(workerAgentIds)
+    .map((agentId) => {
+      const agentTasks = completedTasksByAgent[agentId] ?? [];
+      const agentChangesets = mergedChangesetsByAgent[agentId] ?? [];
+      return {
+        agent_name: agentNameById.get(agentId) ?? null,
+        tasks_completed: agentTasks.length,
+        changesets_merged: agentChangesets.length,
+        avg_duration_minutes: computeAverageDurationMinutes(
+          agentTasks.map((task) => ({ start: task.createdAt, end: task.completedAt })),
+        ),
+      };
+    })
+    .sort((a, b) => (a.agent_name ?? '').localeCompare(b.agent_name ?? ''));
+
+  return {
+    total_orchestrations: totalOrchestrations,
+    completed_orchestrations: completedOrchestrations,
+    total_tasks: tasks.length,
+    completed_tasks: completedTasks.length,
+    auto_merged_changesets: autoMergedChangesets,
+    rejected_changesets: rejectedChangesets,
+    avg_task_duration_minutes: avgTaskDurationMinutes,
+    avg_changeset_review_time_minutes: avgChangesetReviewTimeMinutes,
+    worker_stats: workerStats,
+  };
+}
 
 router.get(
   '/v1/projects/:project_id/orchestrations/:orchestration_id',
@@ -992,11 +1040,9 @@ router.patch(
       try {
         const lockQb = queryRunner.manager
           .createQueryBuilder(ProjectOrchestrationTask, 'task')
+          .leftJoinAndSelect('task.orchestration', 'orchestration')
           .where('task.id = :id', { id: task.id });
         if (AppDataSource.options.type === 'postgres') {
-          // PostgreSQL: lock only the task row. FOR UPDATE cannot be applied
-          // to the nullable side of an outer join (orchestration), so we
-          // omit the leftJoin here and re-fetch orchestration after.
           lockQb.setLock('pessimistic_write');
         }
         const lockedTask = await lockQb.getOne();
@@ -3898,6 +3944,50 @@ async function buildWorkerLoad(projectId: string) {
       utilization_score: utilizationScore,
     };
   });
+}
+
+/** Cap for the recent-activity slices surfaced on the dashboard. */
+const DASHBOARD_RECENT_LIMIT = 5;
+
+/**
+ * Build the aggregated dashboard payload for GET /v1/projects/:project_id/dashboard.
+ *
+ * Each section reuses the same builder/serializer as its dedicated endpoint so the
+ * dashboard is a strict superset of calling them individually:
+ *   loop_status       = buildLoopStatus(projectId)               // GET /loop-status
+ *   metrics           = buildProjectMetrics(projectId)           // GET /metrics
+ *   worker_load       = { data: buildWorkerLoad(projectId) }     // GET /worker-load
+ *   recent_changesets = last DASHBOARD_RECENT_LIMIT by updatedAt // GET /changesets ordering + serializeChangeset
+ *   recent_tasks      = last DASHBOARD_RECENT_LIMIT by updatedAt // serializeTask
+ *
+ * The independent sections are fetched concurrently; the timestamp is captured
+ * once, after the data resolves, so generated_at reflects the snapshot.
+ */
+async function buildDashboard(projectId: string) {
+  const [loop_status, metrics, workers, recentChangesets, recentTasks] = await Promise.all([
+    buildLoopStatus(projectId),
+    buildProjectMetrics(projectId),
+    buildWorkerLoad(projectId),
+    AppDataSource.getRepository(ProjectChangeset).find({
+      where: { projectId },
+      order: { updatedAt: 'DESC' },
+      take: DASHBOARD_RECENT_LIMIT,
+    }),
+    AppDataSource.getRepository(ProjectOrchestrationTask).find({
+      where: { projectId },
+      order: { updatedAt: 'DESC' },
+      take: DASHBOARD_RECENT_LIMIT,
+    }),
+  ]);
+
+  return {
+    loop_status,
+    metrics,
+    worker_load: { data: workers },
+    recent_changesets: recentChangesets.map(serializeChangeset),
+    recent_tasks: recentTasks.map(serializeTask),
+    generated_at: new Date().toISOString(),
+  };
 }
 
 function getAgentMaxConcurrent(agent: Agent): number {

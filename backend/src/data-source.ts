@@ -38,6 +38,7 @@ import {
   ProjectSecurityAdvisory,
   ProjectWorkSavedQuery,
   ProjectWebhookDelivery,
+  AuditLogEntry,
 } from './entities';
 
 const isTestEnv = process.env.NODE_ENV === 'test';
@@ -81,6 +82,7 @@ const entities = [
   ProjectSecurityAdvisory,
   ProjectWorkSavedQuery,
   ProjectWebhookDelivery,
+  AuditLogEntry,
 ];
 
 const migrations = [`${__dirname}/migrations/*{.ts,.js}`];

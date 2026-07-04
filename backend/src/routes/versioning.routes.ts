@@ -34,6 +34,7 @@ import { ProjectCommitSnapshot, ProjectCommitVerificationStatus } from '../entit
 import { GiteaSyncService } from '../services/gitea-sync.service';
 import { ProjectAuditAction } from '../entities/project-audit-event.entity';
 import { recordProjectModuleAudit } from '../services/project-audit.service';
+import { recordAuditLog } from '../services/audit-log.service';
 
 const router = Router();
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -1359,6 +1360,17 @@ router.patch(
       changeset.reviewNotes = reviewNotes;
       const saved = await AppDataSource.getRepository(ProjectChangeset).save(changeset);
 
+      try {
+        await AppDataSource.transaction(async (manager) => {
+          await recordAuditLog(manager, req.params.project_id, actor.userId ? 'user' : 'agent', actor.actorId, `changeset_${decision}`, 'changeset', saved.id, {
+            title: saved.title,
+            notes: reviewNotes,
+          });
+        });
+      } catch (auditErr) {
+        console.warn('Failed to record changeset review audit log:', auditErr);
+      }
+
       // ── R12a: auto-merge on approval. When the PM approves a changeset we try
       // to take it merge_ready → merged in this same request so the autonomous
       // loop doesn't have to hand-merge. Opt out with ?auto_merge=false (query)
@@ -1677,6 +1689,16 @@ router.post(
       }
 
       const result = await AppDataSource.transaction(async (manager) => mergeChangeset(manager, req.params.project_id, loaded.id, actor));
+      try {
+        await AppDataSource.transaction(async (manager) => {
+          await recordAuditLog(manager, req.params.project_id, 'user', actor.actorId, 'changeset_merged', 'changeset', loaded.id, {
+            title: loaded.title,
+            branch_id: loaded.branchId,
+          });
+        });
+      } catch (auditErr) {
+        console.warn('Failed to record changeset merge audit log:', auditErr);
+      }
       if (result.conflict) {
         res.status(409).json({
           detail: 'Changeset has file revision conflicts',
@@ -3855,7 +3877,7 @@ function serializeCommit(commit: ProjectCommit) {
   };
 }
 
-function serializeChangeset(changeset: ProjectChangeset) {
+export function serializeChangeset(changeset: ProjectChangeset) {
   return {
     id: changeset.id,
     project_id: changeset.projectId,
