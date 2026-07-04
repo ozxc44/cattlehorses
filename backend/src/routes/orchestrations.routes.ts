@@ -290,6 +290,7 @@ router.post(
           workerContextPath: `${orchestration.basePath}/workers/${taskId}.worker_context.md`,
           acceptanceCriteria: normalizeStringArray(req.body.acceptance_criteria),
           dependsOn: normalizeStringArray(req.body.depends_on),
+          requiredCapability: normalizeCapability(req.body.required_capability),
           priority: normalizeTaskPriority(req.body.priority),
           createdByUserId: actor.userId,
           createdByAgentId: actor.agentId,
@@ -444,6 +445,58 @@ router.get(
       res.json({ data: loaded.tasks.map(serializeTask) });
     } catch (err) {
       console.error('List orchestration tasks error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/capable-agents',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const task = await loadTask(req.params.project_id, req.params.orchestration_id, req.params.task_id);
+      if (!task) {
+        res.status(404).json({ detail: 'Task not found' });
+        return;
+      }
+      if (req.agent && task.assignedAgentId !== req.agent.id && task.orchestration.mainAgentId !== req.agent.id) {
+        res.status(403).json({ detail: 'Agent is not part of this task' });
+        return;
+      }
+
+      const requiredCapability = normalizeCapability(task.requiredCapability);
+      const agentRepo = AppDataSource.getRepository(Agent);
+      const qb = agentRepo
+        .createQueryBuilder('agent')
+        .where('agent.projectId = :projectId', { projectId: task.projectId })
+        .andWhere('agent.lifecycleStatus = :lifecycleStatus', { lifecycleStatus: AgentLifecycleStatus.ACTIVE });
+
+      if (requiredCapability) {
+        qb.andWhere('agent.capabilities LIKE :capability ESCAPE \'!\'', {
+          capability: `%${escapeLikePattern(requiredCapability)}%`,
+        });
+      }
+
+      const agents = await qb
+        .orderBy('agent.name', 'ASC')
+        .getMany();
+
+      const capableAgents = agents.filter((agent) => {
+        const presence = getAgentPresence(agent);
+        if (!presence.dispatchable) return false;
+        if (!requiredCapability) return true;
+        return normalizeCapabilities(agent.capabilities).includes(requiredCapability);
+      });
+
+      res.json({
+        data: capableAgents.map(serializeCapableAgent),
+        required_capability: requiredCapability,
+      });
+    } catch (err) {
+      console.error('List capable agents error:', err);
       res.status(500).json({ detail: 'Internal server error' });
     }
   },
@@ -1257,6 +1310,7 @@ router.post(
           workerContextPath: `${orchestration.basePath}/workers/${newTaskId}.worker_context.md`,
           acceptanceCriteria: task.acceptanceCriteria ?? [],
           dependsOn: task.dependsOn ?? [],
+          requiredCapability: task.requiredCapability ?? null,
           priority: task.priority ?? 0,
           createdByUserId: actor.userId,
           createdByAgentId: actor.agentId,
@@ -1966,6 +2020,7 @@ function serializeTask(task: ProjectOrchestrationTask) {
     evidence_path: task.evidencePath ?? null,
     acceptance_criteria: task.acceptanceCriteria ?? [],
     depends_on: task.dependsOn ?? [],
+    required_capability: task.requiredCapability ?? null,
     priority: task.priority ?? 0,
     review_notes: task.reviewNotes ?? null,
     requested_changes: task.requestedChanges ?? null,
@@ -1996,6 +2051,7 @@ function serializeTaskLedgerItem(task: ProjectOrchestrationTask) {
     evidence_path: task.evidencePath ?? null,
     acceptance_criteria: task.acceptanceCriteria ?? [],
     depends_on: task.dependsOn ?? [],
+    required_capability: task.requiredCapability ?? null,
     priority: task.priority ?? 0,
     review_notes: task.reviewNotes ?? null,
     requested_changes: task.requestedChanges ?? null,
@@ -2004,6 +2060,26 @@ function serializeTaskLedgerItem(task: ProjectOrchestrationTask) {
     completed_at: task.completedAt ?? null,
     reviewed_at: task.reviewedAt ?? null,
     md_artifacts: artifacts ?? null,
+  };
+}
+
+function serializeCapableAgent(agent: Agent) {
+  const presence = getAgentPresence(agent);
+  return {
+    id: agent.id,
+    project_id: agent.projectId,
+    name: agent.name,
+    description: agent.description ?? null,
+    capabilities: normalizeCapabilities(agent.capabilities),
+    status: agent.status,
+    presence: presence.presence,
+    health_status: presence.healthStatus,
+    is_online: presence.isOnline,
+    dispatchable: presence.dispatchable,
+    last_heartbeat_at: presence.lastHeartbeatAt,
+    heartbeat_age_ms: presence.heartbeatAgeMs,
+    created_at: agent.createdAt,
+    updated_at: agent.updatedAt,
   };
 }
 
@@ -2585,6 +2661,21 @@ function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))]
     .map((item) => item.trim());
+}
+
+function normalizeCapabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0))]
+    .slice(0, 50);
+}
+
+function normalizeCapability(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized ? normalized.slice(0, 128) : null;
 }
 
 function normalizeTaskPriority(value: unknown): number {

@@ -72,6 +72,7 @@ function serializeAgent(agent: Agent, apiKey?: string) {
     description: agent.description ?? null,
     system_prompt: typeof config.system_prompt === 'string' ? config.system_prompt : '',
     endpoint_url: typeof config.endpoint_url === 'string' ? config.endpoint_url : null,
+    capabilities: normalizeCapabilities(agent.capabilities),
     status: agent.status,
     presence: presence.presence,
     health_status: presence.healthStatus,
@@ -96,6 +97,15 @@ function serializeAgent(agent: Agent, apiKey?: string) {
 
 function cleanOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' ? value.trim() : undefined;
+}
+
+function normalizeCapabilities(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0))]
+    .slice(0, 50);
 }
 
 function v1StatusFromHealth(status: unknown): AgentStatus {
@@ -245,7 +255,7 @@ router.post(
     try {
       const userId = req.user!.userId;
       const projectId = req.params.project_id;
-      const { name, description, system_prompt, endpoint_url, invoke_secret, scopes } = req.body;
+      const { name, description, system_prompt, endpoint_url, invoke_secret, scopes, capabilities } = req.body;
 
       if (!name || typeof name !== 'string' || name.trim().length === 0) {
         res.status(422).json({
@@ -276,6 +286,7 @@ router.post(
           api_key_prefix: apiKeyPrefix,
           scopes: Array.isArray(scopes) ? scopes : undefined,
         },
+        capabilities: normalizeCapabilities(capabilities),
         apiKeyHash,
         apiKeyPrefix,
         status: AgentStatus.ACTIVE,
@@ -348,10 +359,11 @@ router.patch(
         return;
       }
 
-      const { name, description, system_prompt, endpoint_url, invoke_secret, scopes, status, lifecycle_status, superseded_by_agent_id } = req.body;
+      const { name, description, system_prompt, endpoint_url, invoke_secret, scopes, status, lifecycle_status, superseded_by_agent_id, capabilities } = req.body;
       if (name !== undefined) agent.name = name.trim();
       if (description !== undefined) agent.description = cleanOptionalString(description);
       if (status !== undefined) agent.status = status as AgentStatus;
+      if (capabilities !== undefined) agent.capabilities = normalizeCapabilities(capabilities);
       if (lifecycle_status !== undefined) {
         const allowed = Object.values(AgentLifecycleStatus) as string[];
         if (allowed.includes(lifecycle_status)) {
@@ -412,11 +424,12 @@ router.patch(
   async (req: Request, res: Response) => {
     try {
       const agent = (req as any).loadedAgent as Agent;
-      const { name, description, system_prompt, endpoint_url, invoke_secret, scopes, status } = req.body;
+      const { name, description, system_prompt, endpoint_url, invoke_secret, scopes, status, capabilities } = req.body;
 
       if (name !== undefined) agent.name = String(name).trim();
       if (description !== undefined) agent.description = cleanOptionalString(description);
       if (status !== undefined) agent.status = status as AgentStatus;
+      if (capabilities !== undefined) agent.capabilities = normalizeCapabilities(capabilities);
       if (
         system_prompt !== undefined ||
         endpoint_url !== undefined ||

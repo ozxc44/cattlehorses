@@ -75,6 +75,9 @@ export class ProjectOrchestrationTask {
   @Column({ name: 'depends_on', type: 'simple-json', nullable: true })
   dependsOn?: string[] | null;
 
+  @Column({ name: 'required_capability', type: 'varchar', length: 128, nullable: true })
+  requiredCapability?: string | null;
+
   @Column({ type: 'integer', default: 0 })
   priority!: number;
 

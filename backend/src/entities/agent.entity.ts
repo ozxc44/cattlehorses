@@ -54,6 +54,9 @@ export class Agent {
   @Column({ name: 'config_json', type: 'simple-json', nullable: true })
   configJson?: Record<string, unknown>;
 
+  @Column({ type: 'simple-array', nullable: true, default: '' })
+  capabilities?: string[];
+
   @Column({ name: 'api_key_prefix', type: 'varchar', length: 8, nullable: true })
   apiKeyPrefix?: string | null;
 
