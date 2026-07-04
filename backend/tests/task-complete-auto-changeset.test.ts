@@ -73,10 +73,10 @@ async function main(): Promise<void> {
       decision: 'approved', notes: 'accepted',
     });
     check('pm reviews auto-changeset', review.status, 200);
-    check('changeset approved', review.data.status, 'approved');
+    check('changeset merge_ready', review.data.status, 'merge_ready');
 
-    const merge = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${cs.id}/merge`, pmKey, {});
-    check('pm merges auto-changeset', merge.status, 200);
+    const merge = await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${cs.id}/merge`, owner.token);
+    check('owner merges auto-changeset via JWT', merge.status, 200);
     check('changeset merged', merge.data.changeset.status, 'merged');
 
     // ── 3. pm approves the task itself (full acceptance loop) ────────────

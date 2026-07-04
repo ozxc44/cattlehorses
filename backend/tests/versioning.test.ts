@@ -58,7 +58,7 @@ async function main(): Promise<void> {
       { decision: 'approved', notes: 'Looks good.' },
     );
     assert.equal(approved1.status, 200);
-    assert.equal(approved1.data.status, 'approved');
+    assert.equal(approved1.data.status, 'merge_ready');
 
     const approvedEdit = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${changeset1.data.id}`, owner.token, {
       file_ops: [
@@ -355,7 +355,7 @@ async function main(): Promise<void> {
       owner.token,
     );
     assert.equal(unapprovedMerge.status, 409);
-    assert.ok(String(unapprovedMerge.data.detail).toLowerCase().includes('approved'));
+    assert.ok(String(unapprovedMerge.data.detail).toLowerCase().includes('merge_ready'));
 
     const blockedMerge = await api(
       baseUrl,

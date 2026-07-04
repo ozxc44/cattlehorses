@@ -54,6 +54,11 @@ async function main(): Promise<void> {
     const first = await createApprovedChangeset(baseUrl, projectId, owner.token, 'Queue first', 'queue-first.md', 'first');
     const second = await createApprovedChangeset(baseUrl, projectId, owner.token, 'Queue second', 'queue-second.md', 'second');
 
+    const queueListInitial = await api(baseUrl, 'GET', `/v1/projects/${projectId}/changesets/merge-queue`, owner.token);
+    assert.equal(queueListInitial.status, 200);
+    assert.equal(queueListInitial.data.total, 2);
+    assert.ok(queueListInitial.data.data.every((c: any) => c.status === 'merge_ready'));
+
     const unqueuedMerge = await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${first.id}/merge`, owner.token);
     assert.equal(unqueuedMerge.status, 409);
     assert.equal(unqueuedMerge.data.rule, 'merge_queue');
@@ -80,6 +85,11 @@ async function main(): Promise<void> {
     const firstMerge = await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${first.id}/merge`, owner.token);
     assert.equal(firstMerge.status, 200);
     assert.equal(firstMerge.data.changeset.merge_queue.queued, false);
+
+    const queueListAfterFirst = await api(baseUrl, 'GET', `/v1/projects/${projectId}/changesets/merge-queue`, owner.token);
+    assert.equal(queueListAfterFirst.status, 200);
+    assert.equal(queueListAfterFirst.data.total, 1);
+    assert.equal(queueListAfterFirst.data.data[0].id, second.id);
 
     const secondAfterFirst = await api(baseUrl, 'GET', `/v1/projects/${projectId}/changesets/${second.id}`, owner.token);
     assert.equal(secondAfterFirst.status, 200);
@@ -121,6 +131,10 @@ async function main(): Promise<void> {
     assert.equal(secondMerge.status, 200);
     assert.equal(secondMerge.data.changeset.merge_queue.queued, false);
 
+    const queueListAfterSecond = await api(baseUrl, 'GET', `/v1/projects/${projectId}/changesets/merge-queue`, owner.token);
+    assert.equal(queueListAfterSecond.status, 200);
+    assert.equal(queueListAfterSecond.data.total, 0);
+
     const third = await createApprovedChangeset(baseUrl, projectId, owner.token, 'Queue third', 'queue-third.md', 'third');
     const fourth = await createApprovedChangeset(baseUrl, projectId, owner.token, 'Queue fourth', 'queue-fourth.md', 'fourth');
     const thirdQueued = await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${third.id}/merge-queue`, owner.token);
@@ -159,6 +173,7 @@ async function createApprovedChangeset(
     decision: 'approved',
   });
   assert.equal(review.status, 200);
+  assert.equal(review.data.status, 'merge_ready');
   return { id: changeset.data.id };
 }
 

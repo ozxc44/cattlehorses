@@ -22,6 +22,7 @@ export enum ProjectChangesetStatus {
   READY_FOR_REVIEW = 'ready_for_review',
   CHANGES_REQUESTED = 'changes_requested',
   APPROVED = 'approved',
+  MERGE_READY = 'merge_ready',
   MERGED = 'merged',
   CONFLICT = 'conflict',
   REJECTED = 'rejected',

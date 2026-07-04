@@ -844,6 +844,26 @@ router.patch(
   },
 );
 
+router.get(
+  '/v1/projects/:project_id/changesets/merge-queue',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const changesets = await AppDataSource.getRepository(ProjectChangeset).find({
+        where: { projectId, status: ProjectChangesetStatus.MERGE_READY },
+        order: { reviewedAt: 'ASC', updatedAt: 'ASC' },
+      });
+      res.json({ data: changesets.map(serializeChangeset), total: changesets.length });
+    } catch (err) {
+      console.error('List merge queue changesets error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
 router.post(
   '/v1/projects/:project_id/changesets/:changeset_id/merge-queue',
   authenticateJwtOrAgentApiKey,
@@ -864,7 +884,7 @@ router.post(
         if (!isChangesetCreator(changeset, actor) && !isOwnerOrAdmin(req)) {
           return { forbidden: true as const };
         }
-        if (changeset.status !== ProjectChangesetStatus.APPROVED) {
+        if (changeset.status !== ProjectChangesetStatus.MERGE_READY) {
           return { notApproved: true as const };
         }
         if (changeset.mergeQueuePosition != null) {
@@ -894,7 +914,7 @@ router.post(
         return;
       }
       if ('notApproved' in result) {
-        res.status(409).json({ detail: 'Changeset must be approved before entering the local merge queue' });
+        res.status(409).json({ detail: 'Changeset must be merge_ready before entering the local merge queue' });
         return;
       }
       res.json(serializeChangeset(result.changeset));
@@ -1200,8 +1220,11 @@ router.patch(
         res.status(409).json({ detail: 'Closed changesets cannot be edited' });
         return;
       }
-      if (changeset.status === ProjectChangesetStatus.APPROVED) {
-        res.status(409).json({ detail: 'Approved changesets cannot be edited; request changes or create a new changeset' });
+      if (
+        changeset.status === ProjectChangesetStatus.APPROVED ||
+        changeset.status === ProjectChangesetStatus.MERGE_READY
+      ) {
+        res.status(409).json({ detail: 'Approved/merge_ready changesets cannot be edited; request changes or create a new changeset' });
         return;
       }
       if (!isChangesetCreator(changeset, actor) && !isOwnerOrAdmin(req)) {
@@ -1281,7 +1304,7 @@ router.patch(
       const reviewNotes = typeof req.body.notes === 'string' ? req.body.notes.slice(0, 10_000) : null;
       changeset.reviews = upsertChangesetReview(changeset.reviews, actor, decision, reviewNotes, reviewedAt);
       changeset.status = decision === 'approved'
-        ? ProjectChangesetStatus.APPROVED
+        ? ProjectChangesetStatus.MERGE_READY
         : decision === 'changes_requested'
           ? ProjectChangesetStatus.CHANGES_REQUESTED
           : ProjectChangesetStatus.REJECTED;
@@ -1504,8 +1527,8 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const actor = getActor(req);
-      if (!actor) {
-        res.status(401).json({ detail: 'Authentication required' });
+      if (!actor?.userId) {
+        res.status(403).json({ detail: 'Only a JWT-authenticated user can merge this changeset' });
         return;
       }
       const loaded = await AppDataSource.getRepository(ProjectChangeset).findOne({
@@ -1515,12 +1538,15 @@ router.post(
         res.status(404).json({ detail: 'Changeset not found' });
         return;
       }
-      if (!await canReviewChangeset(req, loaded)) {
-        res.status(403).json({ detail: 'Only owner/admin or orchestration main agent can merge this changeset' });
+      if (!isOwnerOrAdmin(req)) {
+        res.status(403).json({ detail: 'Only project owner/admin can merge this changeset' });
         return;
       }
-      if (loaded.status !== ProjectChangesetStatus.APPROVED) {
-        res.status(409).json({ detail: 'Changeset must be approved before merge' });
+      if (
+        loaded.status !== ProjectChangesetStatus.MERGE_READY &&
+        loaded.status !== ProjectChangesetStatus.APPROVED
+      ) {
+        res.status(409).json({ detail: 'Changeset must be merge_ready or approved before merge' });
         return;
       }
       const targetBranch = await AppDataSource.getRepository(ProjectBranch).findOne({
@@ -1781,8 +1807,11 @@ async function mergeChangeset(
 ): Promise<{ conflict: true; changeset: ProjectChangeset } | { conflict: false; changeset: ProjectChangeset; commit: ProjectCommit }> {
   const changeset = await manager.findOneByOrFail(ProjectChangeset, { id: changesetId, projectId });
   const branch = await manager.findOneByOrFail(ProjectBranch, { id: changeset.branchId, projectId });
-  if (changeset.status !== ProjectChangesetStatus.APPROVED) {
-    throw new Error('Changeset must be approved before merge');
+  if (
+    changeset.status !== ProjectChangesetStatus.MERGE_READY &&
+    changeset.status !== ProjectChangesetStatus.APPROVED
+  ) {
+    throw new Error('Changeset must be merge_ready or approved before merge');
   }
   if ((branch.headCommitId ?? null) !== (changeset.baseCommitId ?? null)) {
     const conflicts = [{
@@ -3011,7 +3040,7 @@ async function buildMergeQueueBlock(projectId: string, branchId: string, changes
     .createQueryBuilder('queued')
     .where('queued.projectId = :projectId', { projectId })
     .andWhere('queued.branchId = :branchId', { branchId })
-    .andWhere('queued.status = :status', { status: ProjectChangesetStatus.APPROVED })
+    .andWhere('queued.status = :status', { status: ProjectChangesetStatus.MERGE_READY })
     .andWhere('queued.mergeQueuePosition IS NOT NULL')
     .orderBy('queued.mergeQueuePosition', 'ASC')
     .addOrderBy('queued.queuedAt', 'ASC')

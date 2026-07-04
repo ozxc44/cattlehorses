@@ -61,11 +61,11 @@ async function main(): Promise<void> {
       decision: 'approved', notes: 'accept deliverable',
     });
     check('project-main agent reviews changeset (Phase 1 unlock)', reviewByPm.status, 200);
-    check('changeset approved', reviewByPm.data.status, 'approved');
+    check('changeset merge_ready', reviewByPm.data.status, 'merge_ready');
 
-    // ── 2. Project-main agent can MERGE the changeset ────────────────────
-    const mergeByPm = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${csId}/merge`, pmKey, {});
-    check('project-main agent merges changeset', mergeByPm.status, 200);
+    // ── 2. A JWT-authenticated user (owner) must execute the actual merge ──
+    const mergeByPm = await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${csId}/merge`, owner.token);
+    check('owner merges changeset via JWT', mergeByPm.status, 200);
     check('changeset merged', mergeByPm.data.changeset.status, 'merged');
 
     // ── 3. A non-main agent CANNOT review a changeset it doesn't own ─────
