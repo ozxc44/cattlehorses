@@ -4,16 +4,16 @@
 # agent key, and local paths.
 #
 # Usage:
-#   ./generate-executor-config.sh <agent-type> --base-url <url> --key <zzk_...>
+#   ./generate-executor-config.sh <agent-type> --base-url <url> --key <agent-key>
 #       [--label <name>] [--install]
 #
-# agent-type: codex | kimi | mimo  (determines wrapper + env var name)
+# agent-type: codex | kimi | mimo | gemini | aider  (determines wrapper + env var name)
 # --install:  macOS loads the plist into launchd; Linux copies to /etc/systemd
 #
 # Example:
 #   ./generate-executor-config.sh kimi \
 #       --base-url http://192.168.1.10:18080/agent \
-#       --key zzk_abc123...
+#       --key <agent-key>
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,7 +48,9 @@ case "$AGENT_TYPE" in
   codex) WRAPPER="codex-pm-executor-wrapper.py"; ENV_VAR="ZZ_IDENTITY_PATH";;
   kimi)  WRAPPER="kimi-worker-executor-wrapper.py"; ENV_VAR="KIMI_AGENT_KEY";;
   mimo)  WRAPPER="mimo-worker-executor-wrapper.py"; ENV_VAR="MIMO_AGENT_KEY";;
-  *) echo "ERROR: unknown agent-type '$AGENT_TYPE' (use codex|kimi|mimo)"; exit 1;;
+  gemini) WRAPPER="gemini-worker-executor-wrapper.py"; ENV_VAR="GEMINI_AGENT_KEY";;
+  aider) WRAPPER="aider-worker-executor-wrapper.py"; ENV_VAR="AIDER_AGENT_KEY";;
+  *) echo "ERROR: unknown agent-type '$AGENT_TYPE' (use codex|kimi|mimo|gemini|aider)"; exit 1;;
 esac
 
 LABEL="${LABEL:-com.zz-agent.${AGENT_TYPE}-executor}"
