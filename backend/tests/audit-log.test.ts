@@ -67,14 +67,11 @@ async function main(): Promise<void> {
     const taskId = task.data.id;
 
     const afterDispatch = await apiWithKey(baseUrl, 'GET', `/v1/projects/${projectId}/audit-log`, pmKey);
-    check('audit log after dispatch (optional - task audit not yet wired)', afterDispatch.data.length >= 0, true);
     const dispatchEntry = afterDispatch.data.find((e: any) => e.action === 'task_dispatched');
-    check('task_dispatched entry (optional)', true, true);
-    if (dispatchEntry) {
-      check('dispatch entry actor_type', dispatchEntry.actor_type, 'agent');
-      check('dispatch entry target_type', dispatchEntry.target_type, 'task');
-      check('dispatch entry target_id', dispatchEntry.target_id, taskId);
-    }
+    check('task_dispatched entry exists', !!dispatchEntry, true);
+    check('dispatch entry actor_type', dispatchEntry?.actor_type, 'agent');
+    check('dispatch entry target_type', dispatchEntry?.target_type, 'task');
+    check('dispatch entry target_id', dispatchEntry?.target_id, taskId);
 
     // ── Test 2: Task review creates audit log entry ────────────────────
     await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/orchestrations/${orchId}/tasks/${taskId}/claim`, workerKey, {});
@@ -86,8 +83,17 @@ async function main(): Promise<void> {
     });
 
     const afterReview = await apiWithKey(baseUrl, 'GET', `/v1/projects/${projectId}/audit-log`, pmKey);
+
+    // claim + approve must both be audited now that R23a wires them.
+    const claimEntry = afterReview.data.find((e: any) => e.action === 'task_claimed');
+    check('task_claimed entry exists', !!claimEntry, true);
+    check('claim entry target_type', claimEntry?.target_type, 'task');
+    check('claim entry target_id', claimEntry?.target_id, taskId);
+
     const approveEntry = afterReview.data.find((e: any) => e.action === 'task_approved');
-    check('task_approved entry (optional)', true, true);
+    check('task_approved entry exists', !!approveEntry, true);
+    check('approve entry target_type', approveEntry?.target_type, 'task');
+    check('approve entry target_id', approveEntry?.target_id, taskId);
 
     // ── Test 3: Changeset review creates audit log entry ───────────────
     const cs = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/changesets`, pmKey, {

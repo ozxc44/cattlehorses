@@ -29,6 +29,7 @@ import notificationMetricsRoutes from './routes/notification-metrics.routes';
 import rewardPreviewRoutes from './routes/reward-preview.routes';
 import workSavedQueriesRoutes from './routes/work-saved-queries.routes';
 import auditLogRoutes from './routes/audit-log.routes';
+import notifyRoutes from './routes/notify.routes';
 import swaggerUi from 'swagger-ui-express';
 import YAML from 'yamljs';
 import { log as logger, requestLog } from './services/logger';
@@ -462,6 +463,7 @@ app.use(notificationMetricsRoutes);
 app.use(rewardPreviewRoutes);
 app.use(workSavedQueriesRoutes);
 app.use(auditLogRoutes);
+app.use(notifyRoutes);
 
 // ─── Static dashboard (local E2E convenience) ────────────────────────────────
 // When SERVE_DASHBOARD=1, serve the dashboard/ directory at / so that
