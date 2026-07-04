@@ -434,20 +434,23 @@ class ExecutorDaemon:
         Returns a list of {path, content} for changed/added files (not deletions).
         Uses git diff against HEAD so it captures both staged and unstaged changes.
         """
+        import os as _os
+        cwd = _os.getcwd()
         try:
             # Get list of changed files (added/modified, not deleted)
             r = subprocess.run(
                 ['git', 'diff', '--name-only', '--diff-filter=AM', 'HEAD'],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=10, cwd=cwd,
             )
             changed = [f.strip() for f in r.stdout.strip().split('\n') if f.strip()]
             # Also check untracked files
             r2 = subprocess.run(
                 ['git', 'ls-files', '--others', '--exclude-standard'],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=10, cwd=cwd,
             )
             untracked = [f.strip() for f in r2.stdout.strip().split('\n') if f.strip()]
             all_changed = changed + untracked
+            print(f"  🔍 detect_code_changes: cwd={cwd} changed={len(changed)} untracked={len(untracked)}", flush=True)
             if not all_changed:
                 return []
 
@@ -455,13 +458,15 @@ class ExecutorDaemon:
             file_ops = []
             for path in all_changed:
                 try:
-                    with open(path, 'r') as f:
+                    abs_path = _os.path.join(cwd, path) if not _os.path.isabs(path) else path
+                    with open(abs_path, 'r') as f:
                         content = f.read()
                     file_ops.append({'path': path, 'content': content})
                 except (IOError, UnicodeDecodeError):
                     pass  # skip binary or unreadable files
             return file_ops
-        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+            print(f"  ⚠ detect_code_changes error: {e}", flush=True)
             return []
 
     def submit_code_changeset(self, pid, oid, tid, file_ops):
