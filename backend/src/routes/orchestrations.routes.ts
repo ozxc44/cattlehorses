@@ -778,6 +778,48 @@ router.patch(
   },
 );
 
+router.patch(
+  '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/progress',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.SendMessage),
+  async (req: Request, res: Response) => {
+    try {
+      const task = await loadTask(req.params.project_id, req.params.orchestration_id, req.params.task_id);
+      if (!task) {
+        res.status(404).json({ detail: 'Task not found' });
+        return;
+      }
+      if (!ensureAssignedWorkerAgent(req, res, task)) return;
+
+      if (req.body.progress_note !== undefined && typeof req.body.progress_note !== 'string') {
+        res.status(422).json({ detail: 'progress_note must be a string' });
+        return;
+      }
+      const progressPercent = normalizeProgressPercent(req.body.progress_percent);
+      if (!progressPercent.ok) {
+        res.status(422).json({ detail: progressPercent.error });
+        return;
+      }
+
+      if (req.body.progress_note !== undefined) {
+        const note = req.body.progress_note.trim().slice(0, 20_000);
+        task.progressNote = note || null;
+      }
+      if (progressPercent.present) {
+        task.progressPercent = progressPercent.value;
+      }
+      task.progressAt = new Date();
+
+      const updated = await AppDataSource.getRepository(ProjectOrchestrationTask).save(task);
+      res.json(serializeTask(updated));
+    } catch (err) {
+      console.error('Update orchestration task progress error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
 router.post(
   '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/complete',
   authenticateJwtOrAgentApiKey,
@@ -1773,6 +1815,18 @@ function ensureAssignedWorkerOrUser(req: Request, res: Response, task: ProjectOr
   return true;
 }
 
+function ensureAssignedWorkerAgent(req: Request, res: Response, task: ProjectOrchestrationTask): boolean {
+  if (!req.agent) {
+    res.status(403).json({ detail: 'Only the assigned worker agent can perform this task action' });
+    return false;
+  }
+  if (!task.assignedAgentId || task.assignedAgentId !== req.agent.id) {
+    res.status(403).json({ detail: 'Only the assigned worker agent can perform this task action' });
+    return false;
+  }
+  return true;
+}
+
 /**
  * Create a changeset representing a worker's task completion, so the project/orchestration
  * main agent can review + merge the deliverable via the standard changeset flow.
@@ -2022,6 +2076,9 @@ function serializeTask(task: ProjectOrchestrationTask) {
     depends_on: task.dependsOn ?? [],
     required_capability: task.requiredCapability ?? null,
     priority: task.priority ?? 0,
+    progress_note: task.progressNote ?? null,
+    progress_percent: task.progressPercent ?? null,
+    progress_at: task.progressAt ?? null,
     review_notes: task.reviewNotes ?? null,
     requested_changes: task.requestedChanges ?? null,
     created_by_user_id: task.createdByUserId ?? null,
@@ -2053,6 +2110,9 @@ function serializeTaskLedgerItem(task: ProjectOrchestrationTask) {
     depends_on: task.dependsOn ?? [],
     required_capability: task.requiredCapability ?? null,
     priority: task.priority ?? 0,
+    progress_note: task.progressNote ?? null,
+    progress_percent: task.progressPercent ?? null,
+    progress_at: task.progressAt ?? null,
     review_notes: task.reviewNotes ?? null,
     requested_changes: task.requestedChanges ?? null,
     dispatched_at: task.dispatchedAt ?? null,
@@ -2686,6 +2746,25 @@ function normalizeTaskPriority(value: unknown): number {
       : 0;
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, Math.trunc(parsed));
+}
+
+function normalizeProgressPercent(
+  value: unknown,
+): { ok: true; present: false } | { ok: true; present: true; value: number | null } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, present: false };
+  if (value === null || value === '') return { ok: true, present: true, value: null };
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim()
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isInteger(parsed)) {
+    return { ok: false, error: 'progress_percent must be an integer from 0 to 100' };
+  }
+  if (parsed < 0 || parsed > 100) {
+    return { ok: false, error: 'progress_percent must be between 0 and 100' };
+  }
+  return { ok: true, present: true, value: parsed };
 }
 
 function normalizeEvidence(value: unknown): Record<string, unknown> {

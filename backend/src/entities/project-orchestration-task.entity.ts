@@ -2,6 +2,7 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  Check,
   CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
@@ -28,6 +29,10 @@ export enum ProjectOrchestrationTaskStatus {
 @Index(['projectId', 'status'])
 @Index(['orchestrationId', 'status'])
 @Index(['assignedAgentId', 'status'])
+@Check(
+  'CHK_project_orchestration_tasks_progress_percent',
+  '"progress_percent" IS NULL OR ("progress_percent" >= 0 AND "progress_percent" <= 100)',
+)
 export class ProjectOrchestrationTask {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -80,6 +85,15 @@ export class ProjectOrchestrationTask {
 
   @Column({ type: 'integer', default: 0 })
   priority!: number;
+
+  @Column({ name: 'progress_note', type: 'text', nullable: true })
+  progressNote?: string | null;
+
+  @Column({ name: 'progress_percent', type: 'integer', nullable: true })
+  progressPercent?: number | null;
+
+  @Column({ name: 'progress_at', nullable: true })
+  progressAt?: Date | null;
 
   @Column({ name: 'review_notes', type: 'text', nullable: true })
   reviewNotes?: string | null;

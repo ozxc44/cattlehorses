@@ -104,6 +104,7 @@ function normalizeReflectedColumnTypes(): void {
     ]),
     { target: ProjectOrchestrationTask, propertyName: 'dispatchedAt' },
     { target: ProjectOrchestrationTask, propertyName: 'claimedAt' },
+    { target: ProjectOrchestrationTask, propertyName: 'progressAt' },
     { target: ProjectFile, propertyName: 'deletedAt' },
     ...[ProjectChangesetComment].flatMap((t) => [
       { target: t, propertyName: 'resolvedAt' },
