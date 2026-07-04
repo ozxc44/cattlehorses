@@ -1932,15 +1932,19 @@ async function mergeChangeset(
   // A whole-file upsert whose content was generated from a stale working copy
   // can silently delete lines added to HEAD after the op's base_revision_id:
   // if HEAD has a line that exists neither in the base-revision content nor in
-  // op.content, applying op.content as a full overwrite would clobber it. Run
-  // this before detectFileConflicts so the caller gets a specific, actionable
-  // 409 instead of a generic file-revision conflict. (gk R9b)
+  // op.content, applying op.content as a full overwrite would clobber it.
+  // IMPORTANT: only run this when the op's base_revision_id IS the file's
+  // current revision (a "fresh" base). When the base is already stale, the
+  // generic file-revision conflict path below handles it and must keep
+  // precedence so existing tests (and callers) see {changeset.status:'conflict'}.
+  // (gk R9b, ordering fix)
   for (const op of changeset.fileOps) {
     if (op.op !== 'upsert' || !op.base_revision_id) continue;
     const currentFile = await manager.findOne(ProjectFile, {
       where: { projectId, path: op.path, deletedAt: IsNull() },
     });
     if (!currentFile) continue; // brand-new file: nothing on HEAD to regress
+    if (op.base_revision_id !== currentFile.currentRevisionId) continue; // stale base → let conflict path handle
     const baseRevision = await manager.findOne(ProjectFileRevision, {
       where: { id: op.base_revision_id, projectId, path: op.path },
     });
