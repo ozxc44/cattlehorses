@@ -428,6 +428,76 @@ class ExecutorDaemon:
             'result_md': result_md, 'evidence': evidence or {'files_changed': []}, 'status': 'ready_for_review',
         })
 
+    def detect_code_changes(self):
+        """Detect uncommitted file changes in the working directory via git.
+
+        Returns a list of {path, content} for changed/added files (not deletions).
+        Uses git diff against HEAD so it captures both staged and unstaged changes.
+        """
+        try:
+            # Get list of changed files (added/modified, not deleted)
+            r = subprocess.run(
+                ['git', 'diff', '--name-only', '--diff-filter=AM', 'HEAD'],
+                capture_output=True, text=True, timeout=10,
+            )
+            changed = [f.strip() for f in r.stdout.strip().split('\n') if f.strip()]
+            # Also check untracked files
+            r2 = subprocess.run(
+                ['git', 'ls-files', '--others', '--exclude-standard'],
+                capture_output=True, text=True, timeout=10,
+            )
+            untracked = [f.strip() for f in r2.stdout.strip().split('\n') if f.strip()]
+            all_changed = changed + untracked
+            if not all_changed:
+                return []
+
+            # Read content of each changed file
+            file_ops = []
+            for path in all_changed:
+                try:
+                    with open(path, 'r') as f:
+                        content = f.read()
+                    file_ops.append({'path': path, 'content': content})
+                except (IOError, UnicodeDecodeError):
+                    pass  # skip binary or unreadable files
+            return file_ops
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            return []
+
+    def submit_code_changeset(self, pid, oid, tid, file_ops):
+        """Submit actual code changes as a changeset before completing the task.
+
+        Returns the changeset id, or None if submission failed.
+        """
+        if not file_ops:
+            return None
+        # Fetch base_revision_id for each existing file
+        enriched_ops = []
+        for op in file_ops:
+            path = op['path']
+            # Check if file exists on platform (need base_revision_id)
+            r = self.api('GET', f'/v1/projects/{pid}/files?exact_path={path}')
+            data = r.get('data', [])
+            base_rev = data[0].get('current_revision_id') if data else None
+            new_op = {'op': 'upsert', 'path': path, 'content': op['content']}
+            if base_rev:
+                new_op['base_revision_id'] = base_rev
+            enriched_ops.append(new_op)
+
+        body = {
+            'title': f'Worker code changes (task {tid[:8]})',
+            'status': 'submitted',
+            'file_ops': enriched_ops,
+            'orchestration_id': oid,
+        }
+        r = self.api('POST', f'/v1/projects/{pid}/changesets', body)
+        cs_id = r.get('id')
+        if cs_id:
+            print(f"  📦 submitted code changeset ({len(enriched_ops)} files): {cs_id[:8]}", flush=True)
+        else:
+            print(f"  ⚠ code changeset submission failed: {r.get('detail', '?')}", flush=True)
+        return cs_id
+
     def review_changeset(self, pid, cs_id, decision, notes=''):
         return self.api('PATCH', f'/v1/projects/{pid}/changesets/{cs_id}/review', {'decision': decision, 'notes': notes})
 
@@ -634,6 +704,13 @@ class ExecutorDaemon:
             return False
         result_md = result.get('result_md', '')
         print(f"  ✓ produced ({len(result_md)} chars)", flush=True)
+
+        # Detect and submit code changes (if the handler's CLI modified files)
+        code_changes = self.detect_code_changes()
+        if code_changes:
+            self.submit_code_changeset(pid, oid, tid, code_changes)
+        else:
+            print(f"  (no code changes detected in working dir)", flush=True)
 
         submit = self.submit_task(pid, oid, tid, result_md, result.get('evidence'))
         if submit.get('_error'):
