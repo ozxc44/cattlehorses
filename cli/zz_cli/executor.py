@@ -791,15 +791,42 @@ class ExecutorDaemon:
         result_md = result.get('result_md', '')
         print(f"  ✓ produced ({len(result_md)} chars)", flush=True)
 
+        # ── R8 break-glass: empty-output guard ───────────────────────────────
+        # A handler that produced no real content (e.g. FileNotFoundError on the
+        # CLI binary, invoke endpoint down) used to silently submit an empty
+        # result_md as ready_for_review, which the PM then had to reject. Block
+        # that here: if result_md is empty or too short to be a real deliverable
+        # AND no code changeset was produced, submit as `blocked` with a clear
+        # reason instead of pretending the work is done.
+        result_stripped = (result_md or '').strip()
+        looks_empty = len(result_stripped) < 50  # real deliverables are longer
+        code_changeset_submitted = False
+
         # Detect and submit code changes (if the handler's CLI modified files)
         try:
             code_changes = self.detect_code_changes()
             if code_changes:
-                self.submit_code_changeset(pid, oid, tid, code_changes)
+                cs_id = self.submit_code_changeset(pid, oid, tid, code_changes)
+                if cs_id:
+                    code_changeset_submitted = True
             else:
                 print(f"  (no code changes detected in working dir)", flush=True)
         except Exception as ce:
             print(f"  ⚠ code change detection skipped: {ce}", flush=True)
+
+        if looks_empty and not code_changeset_submitted:
+            print(f"  ⛔ empty-output guard: handler produced no real deliverable ({len(result_stripped)} chars) and no code changeset — submitting as blocked, not ready_for_review", flush=True)
+            blocked_body = {
+                'result_md': f"# Blocked: empty handler output\n\nThe worker handler produced no real deliverable (output was {len(result_stripped)} chars) and no code changes were detected.\n\nLikely causes:\n- The handler CLI binary is not on PATH in the launchd environment\n- The invoke endpoint is down or misconfigured\n- The handler raised an exception (FileNotFoundError, timeout)\n\nThis task was NOT marked ready_for_review to avoid a PM round-trip rejection. Please fix the handler/executor environment and re-dispatch.",
+                'evidence': self._heal_evidence({**(result.get('evidence') or {}), 'blocked_reason': 'empty_output', 'produced_chars': len(result_stripped)}),
+                'status': 'blocked',
+            }
+            submit = self.api('POST', f'/v1/projects/{pid}/orchestrations/{oid}/tasks/{tid}/complete', blocked_body)
+            if submit.get('_error'):
+                print(f"  ✗ blocked-submit failed: {submit.get('detail')}", flush=True)
+                return False
+            print(f"  ✓ submitted (status: blocked — empty-output guard)", flush=True)
+            return True
 
         submit = self.submit_task(pid, oid, tid, result_md, result.get('evidence'))
         if submit.get('_error'):
@@ -971,9 +998,23 @@ class ExecutorDaemon:
                 print(f"\n[{ts}] 🔧 Worker Task: {item.get('title','')[:50]}", flush=True)
                 self.process_worker_task(item, item_pid, oid, tid)
 
-            # Recovery: unclaimed assigned tasks
+            # Recovery: unclaimed assigned tasks.
+            # R8 break-glass: also recover tasks stuck in `running` but never
+            # actually claimed (claimed_at is null). This happens when the
+            # backend auto-transitions dispatch→running on notification but the
+            # worker never ran process_worker_task (e.g. invoke endpoint down,
+            # executor restarted mid-cycle). Without this, such tasks are
+            # orphaned forever — status=running, claimed_at=null, empty output.
             assigned = self.get_assigned_tasks()
-            unclaimed = [t for t in assigned if t.get('status') in ('dispatched', 'changes_requested')]
+            def _is_recoverable(t):
+                s = t.get('status')
+                if s in ('dispatched', 'changes_requested'):
+                    return True
+                # running but never claimed → re-pick (check both snake/camel)
+                if s == 'running' and not (t.get('claimed_at') or t.get('claimedAt')):
+                    return True
+                return False
+            unclaimed = [t for t in assigned if _is_recoverable(t)]
             for task in unclaimed:
                 tid = task.get('id')
                 oid = task.get('orchestration_id')
