@@ -971,12 +971,10 @@ router.patch(
       }
       if (!ensureAssignedWorkerOrUser(req, res, task)) return;
 
-      // ── Atomic claim ────────────────────────────────────────────────────────
-      // Use an atomic UPDATE with a status guard to prevent concurrent requests
-      // from both claiming the same fresh task.  Only tasks in a claimable initial
-      // state (dispatched, pending, changes_requested, blocked, failed,
-      // ready_for_review) can transition to running atomically.  Once running, a
-      // different WHERE branch covers re-claim by the same worker.
+      // ── Pessimistic-lock claim ─────────────────────────────────────────────
+      // Use SELECT ... FOR UPDATE inside a transaction so that concurrent
+      // workers are serialised at the DB level — the second worker blocks until
+      // the first commits, then sees the already-running status and gets 409.
       const claimableStatuses = [
         ProjectOrchestrationTaskStatus.PENDING,
         ProjectOrchestrationTaskStatus.DISPATCHED,
@@ -985,71 +983,93 @@ router.patch(
         ProjectOrchestrationTaskStatus.BLOCKED,
         ProjectOrchestrationTaskStatus.FAILED,
       ];
-      if (claimableStatuses.includes(task.status)) {
-        const dependencyCheck = await checkDependenciesMet(task);
-        if (!dependencyCheck.met) {
-          res.status(409).json({
-            detail: 'Task has unmet dependencies',
-            code: 'DEPENDENCIES_NOT_MET',
-            unmet: dependencyCheck.unmet,
-          });
-          return;
+
+      const queryRunner = AppDataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+      let claimedTask: ProjectOrchestrationTask | null = null;
+      let previousStatus: ProjectOrchestrationTaskStatus | undefined;
+      try {
+        const lockQb = queryRunner.manager
+          .createQueryBuilder(ProjectOrchestrationTask, 'task')
+          .leftJoinAndSelect('task.orchestration', 'orchestration')
+          .where('task.id = :id', { id: task.id });
+        if (AppDataSource.options.type === 'postgres') {
+          lockQb.setLock('pessimistic_write');
         }
-      }
-      const updateFields: Record<string, unknown> = {
-        status: ProjectOrchestrationTaskStatus.RUNNING,
-      };
-      if (req.agent && !task.assignedAgentId) {
-        updateFields.assignedAgentId = req.agent.id;
-      }
+        const lockedTask = await lockQb.getOne();
 
-      const previousStatus = task.status;
-      const repo = AppDataSource.getRepository(ProjectOrchestrationTask);
-      const claimResult = await repo
-        .createQueryBuilder()
-        .update()
-        .set(updateFields)
-        .where('id = :id', { id: task.id })
-        .andWhere('status IN (:...claimableStatuses)', { claimableStatuses })
-        .execute();
-
-      if (claimResult.affected === 0) {
-        // No row was updated — the task is either already running (possibly
-        // claimed by a concurrent request) or in a terminal state.
-        const currentTask = await repo.findOne({
-          where: { id: task.id },
-          relations: ['orchestration'],
-        });
-        if (!currentTask) {
+        if (!lockedTask) {
+          await queryRunner.rollbackTransaction();
           res.status(404).json({ detail: 'Task not found' });
           return;
         }
+
+        previousStatus = lockedTask.status;
+
         // Allow re-claim by the same worker (idempotent).
         if (
-          currentTask.status === ProjectOrchestrationTaskStatus.RUNNING &&
-          req.agent && currentTask.assignedAgentId === req.agent.id
+          lockedTask.status === ProjectOrchestrationTaskStatus.RUNNING &&
+          req.agent && lockedTask.assignedAgentId === req.agent.id
         ) {
-          res.json(serializeTask(currentTask));
+          await queryRunner.rollbackTransaction();
+          res.json(serializeTask(lockedTask));
           return;
         }
-        res.status(409).json({ detail: `Task cannot be claimed from status ${currentTask.status}` });
-        return;
-      }
 
-      // Atomic claim succeeded — reload the claimed task.
-      const claimedTask = await repo.findOne({
-        where: { id: task.id },
-        relations: ['orchestration'],
-      });
-      if (!claimedTask) {
-        res.status(404).json({ detail: 'Task not found after claim' });
-        return;
+        if (claimableStatuses.includes(lockedTask.status)) {
+          const dependencyCheck = await checkDependenciesMet(lockedTask);
+          if (!dependencyCheck.met) {
+            await queryRunner.rollbackTransaction();
+            res.status(409).json({
+              detail: 'Task has unmet dependencies',
+              code: 'DEPENDENCIES_NOT_MET',
+              unmet: dependencyCheck.unmet,
+            });
+            return;
+          }
+        }
+
+        const updateFields: Record<string, unknown> = {
+          status: ProjectOrchestrationTaskStatus.RUNNING,
+        };
+        if (req.agent && !lockedTask.assignedAgentId) {
+          updateFields.assignedAgentId = req.agent.id;
+        }
+
+        const claimResult = await queryRunner.manager
+          .createQueryBuilder()
+          .update(ProjectOrchestrationTask)
+          .set(updateFields)
+          .where('id = :id', { id: lockedTask.id })
+          .andWhere('status IN (:...claimableStatuses)', { claimableStatuses })
+          .execute();
+
+        if (claimResult.affected === 0) {
+          await queryRunner.rollbackTransaction();
+          res.status(409).json({ detail: `Task cannot be claimed from status ${lockedTask.status}` });
+          return;
+        }
+
+        claimedTask = await queryRunner.manager.findOne(ProjectOrchestrationTask, {
+          where: { id: lockedTask.id },
+          relations: ['orchestration'],
+        });
+        if (!claimedTask) {
+          await queryRunner.rollbackTransaction();
+          res.status(404).json({ detail: 'Task not found after claim' });
+          return;
+        }
+        claimedTask.claimedAt = claimedTask.claimedAt ?? new Date();
+        await queryRunner.manager.save(claimedTask);
+        await refreshTaskLedger(queryRunner.manager, claimedTask.orchestration, actor.actorId);
+        await queryRunner.commitTransaction();
+      } catch (txErr) {
+        await queryRunner.rollbackTransaction();
+        throw txErr;
+      } finally {
+        await queryRunner.release();
       }
-      // Record the claim phase timestamp (first claim wins so re-claims don't
-      // move the TTFT claim marker).
-      claimedTask.claimedAt = claimedTask.claimedAt ?? new Date();
-      await repo.save(claimedTask);
-      await AppDataSource.transaction((manager) => refreshTaskLedger(manager, claimedTask.orchestration, actor.actorId));
 
       publishTaskStatusChanged(
         claimedTask.orchestration.sessionId,
