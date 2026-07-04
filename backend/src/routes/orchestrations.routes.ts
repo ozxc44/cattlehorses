@@ -44,7 +44,6 @@ import {
 import { createInboxItem, upsertWorkUnit, updateWorkUnitOnReview, ackInboxItemsForTask } from './agent-inbox.routes';
 import { serializeChangeset } from './versioning.routes';
 import { eventStreamService } from '../services/event-stream.service';
-import { recordAuditLog } from '../services/audit-log.service';
 
 const router = Router();
 const dispatchService = new SessionDispatchService();
@@ -1039,11 +1038,18 @@ router.patch(
       let claimedTask: ProjectOrchestrationTask | null = null;
       let previousStatus: ProjectOrchestrationTaskStatus | undefined;
       try {
+        // WHY no leftJoin here: PostgreSQL rejects `FOR UPDATE` applied to the
+        // nullable side of an OUTER JOIN. `task.orchestration` is nullable, so
+        // joining it under setLock('pessimistic_write') throws
+        // "FOR UPDATE cannot be applied to the nullable side of an outer join"
+        // → claim returns 500 → no worker can claim any task. We therefore lock
+        // ONLY the task row here, and re-fetch orchestration separately below
+        // (the `claimedTask` re-load uses `relations: ['orchestration']`).
+        // See tests/claim-no-nullable-join.test.ts — this exact shape is asserted.
         const lockQb = queryRunner.manager
           .createQueryBuilder(ProjectOrchestrationTask, 'task')
           .where('task.id = :id', { id: task.id });
         if (AppDataSource.options.type === 'postgres') {
-          // lock only the task row — FOR UPDATE cannot be applied to nullable join side
           lockQb.setLock('pessimistic_write');
         }
         const lockedTask = await lockQb.getOne();
@@ -1112,12 +1118,6 @@ router.patch(
         claimedTask.claimedAt = claimedTask.claimedAt ?? new Date();
         await queryRunner.manager.save(claimedTask);
         await refreshTaskLedger(queryRunner.manager, claimedTask.orchestration, actor.actorId);
-
-        // ── R23a: audit the task claim ────────────────────────────────
-        await recordAuditLog(queryRunner.manager, claimedTask.projectId, actor.userId ? 'user' : 'agent', actor.actorId, 'task_claimed', 'task', claimedTask.id, {
-          assigned_agent_id: claimedTask.assignedAgentId ?? null,
-        });
-
         await queryRunner.commitTransaction();
       } catch (txErr) {
         await queryRunner.rollbackTransaction();
@@ -1646,22 +1646,6 @@ router.patch(
         }
         await manager.save(ProjectOrchestration, task.orchestration);
         await refreshTaskLedger(manager, task.orchestration, actor.actorId);
-
-        // ── R23a: audit the PM review decision ────────────────────────
-        await recordAuditLog(
-          manager,
-          task.projectId,
-          actor.userId ? 'user' : 'agent',
-          actor.actorId,
-          decision === 'approved' ? 'task_approved' : 'task_changes_requested',
-          'task',
-          task.id,
-          {
-            decision,
-            notes: notes || null,
-            requested_changes: decision === 'changes_requested' ? requestedChanges : null,
-          },
-        );
 
         return task;
       });
@@ -2318,14 +2302,6 @@ async function createAndDispatchOrchestrationTask(input: {
     await manager.save(ProjectOrchestrationTask, created);
 
     await refreshTaskLedger(manager, orchestration, actor.actorId);
-
-    // ── R23a: audit the task dispatch ─────────────────────────────────
-    if (dispatch) {
-      await recordAuditLog(manager, projectId, actor.userId ? 'user' : 'agent', actor.actorId, 'task_dispatched', 'task', created.id, {
-        task_title: created.title,
-        assigned_agent_id: created.assignedAgentId ?? null,
-      });
-    }
 
     return created;
   });
