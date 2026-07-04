@@ -597,112 +597,109 @@ router.post(
         return;
       }
 
-      const task = await AppDataSource.transaction(async (manager) => {
-        const taskId = randomUUID();
-        const isDispatched = req.body.dispatch !== false;
-        const created = manager.create(ProjectOrchestrationTask, {
-          id: taskId,
-          projectId,
-          orchestrationId: orchestration.id,
-          title: title.value,
-          goal: goal.value,
-          status: isDispatched
-            ? ProjectOrchestrationTaskStatus.DISPATCHED
-            : ProjectOrchestrationTaskStatus.PENDING,
-          assignedAgentId,
-          workerTaskPath: `${orchestration.basePath}/workers/${taskId}.worker_task.md`,
-          workerContextPath: `${orchestration.basePath}/workers/${taskId}.worker_context.md`,
-          acceptanceCriteria: normalizeStringArray(req.body.acceptance_criteria),
-          dependsOn: normalizeStringArray(req.body.depends_on),
-          requiredCapability: normalizeCapability(req.body.required_capability),
-          priority: normalizeTaskPriority(req.body.priority),
-          maxRetries: normalizeTaskRetryLimit(req.body.max_retries),
-          createdByUserId: actor.userId,
-          createdByAgentId: actor.agentId,
-          dispatchedAt: isDispatched ? new Date() : undefined,
-          metadata: { dedup_hash: dedupHash },
-        });
-        await manager.save(ProjectOrchestrationTask, created);
-
-        if (orchestration.status === ProjectOrchestrationStatus.PLANNING) {
-          orchestration.status = ProjectOrchestrationStatus.RUNNING;
-          await manager.save(ProjectOrchestration, orchestration);
-        }
-
-        await upsertProjectFile(manager, {
-          projectId,
-          path: created.workerTaskPath,
-          content: renderWorkerTaskMd(orchestration, created, req.body.scope),
-          actorId: actor.actorId,
-          message: `Dispatch worker task ${created.id}`,
-        });
-        // Inject the project's current git HEAD SHA so the worker knows the
-        // codebase baseline (best-effort; null when git backend isn't populated).
-        let workerGitHead: string | null = null;
-        try {
-          const { gitHeadSha } = await import('../services/project-git.service');
-          workerGitHead = await gitHeadSha(projectId);
-        } catch { /* git not initialized yet */ }
-        await upsertProjectFile(manager, {
-          projectId,
-          path: created.workerContextPath,
-          content: renderWorkerContextMd(orchestration, created, req.body.context, workerGitHead),
-          actorId: actor.actorId,
-          message: `Create worker context ${created.id}`,
-        });
-
-        // ── MD artifact: TASK.md ──────────────────────────────────────────
-        const scopeText = typeof req.body.scope === 'string' && req.body.scope.trim()
-          ? req.body.scope.trim()
-          : 'Use the task goal and context. Keep changes scoped.';
-        await writeTaskMd(manager, orchestration, created, scopeText);
-
-        // Store task artifact paths in metadata
-        const taskDir = taskMdDir(orchestration.basePath, created.id);
-        setMdArtifactPaths(created, {
-          task_dir: taskDir,
-          task: `${taskDir}/TASK.md`,
-        });
-        await manager.save(ProjectOrchestrationTask, created);
-
-        await refreshTaskLedger(manager, orchestration, actor.actorId);
-
-        return created;
+      const task = await createAndDispatchOrchestrationTask({
+        projectId,
+        orchestration,
+        actor,
+        title: title.value,
+        goal: goal.value,
+        assignedAgentId,
+        requiredCapability: normalizeCapability(req.body.required_capability),
+        scope: req.body.scope,
+        context: req.body.context,
+        acceptanceCriteria: normalizeStringArray(req.body.acceptance_criteria),
+        dependsOn: normalizeStringArray(req.body.depends_on),
+        priority: normalizeTaskPriority(req.body.priority),
+        maxRetries: normalizeTaskRetryLimit(req.body.max_retries),
+        dispatch: req.body.dispatch !== false,
       });
-
-      publishTaskStatusChanged(orchestration.sessionId, projectId, task, null);
-
-      if (task.status === ProjectOrchestrationTaskStatus.DISPATCHED) {
-        await dispatchTaskToAssignedAgent({
-          projectId,
-          orchestration,
-          task,
-          actorId: actor.actorId,
-          retry: false,
-        });
-
-        try {
-          if (orchestration.sessionId) {
-            eventStreamService.publish(orchestration.sessionId, {
-              projectId,
-              sessionId: orchestration.sessionId,
-              agentId: task.assignedAgentId ?? undefined,
-              type: 'task_dispatched',
-              payload: {
-                taskId: task.id,
-                agentId: task.assignedAgentId ?? undefined,
-                status: task.status,
-              },
-            });
-          }
-        } catch (streamErr) {
-          console.warn('Failed to publish task_dispatched event:', streamErr);
-        }
-      }
 
       res.status(201).json(serializeTask(task));
     } catch (err) {
       console.error('Create orchestration task error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+/**
+ * POST /v1/projects/:project_id/orchestrations/:orchestration_id/tasks/smart-dispatch
+ *
+ * Auto-select the best available worker and dispatch a task to it in a single
+ * call. Selection pipeline:
+ *   (1) project agents that are online (fresh heartbeat) and not smoke-unhealthy,
+ *   (2) when `required_capability` is given, keep only agents whose capabilities
+ *       contain it,
+ *   (3) pick the agent with the fewest in-flight (active) tasks — tie-break by
+ *       agent name for determinism.
+ * Then create + dispatch the task to the chosen agent.
+ *
+ * Body: { title, goal, required_capability? }
+ * Auth: project-level / orchestration main agent or any user (SendMessage).
+ * 201 → { task_id, assigned_agent_id, assigned_agent_name, selection_reason }
+ * 409 when no eligible worker is available.
+ */
+router.post(
+  '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks/smart-dispatch',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.SendMessage),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const actor = getActor(req);
+      if (!actor) {
+        res.status(401).json({ detail: 'Authentication required' });
+        return;
+      }
+      const orchestration = await loadOrchestration(projectId, req.params.orchestration_id);
+      if (!orchestration) {
+        res.status(404).json({ detail: 'Orchestration not found' });
+        return;
+      }
+      if (!await ensureMainAgentOrUser(req, res, orchestration)) return;
+
+      const title = normalizeRequiredString(req.body.title, 'title', 255);
+      const goal = normalizeRequiredString(req.body.goal, 'goal', 20_000);
+      if (!title.ok) {
+        res.status(422).json({ detail: title.error });
+        return;
+      }
+      if (!goal.ok) {
+        res.status(422).json({ detail: goal.error });
+        return;
+      }
+      const requiredCapability = normalizeCapability(req.body.required_capability);
+
+      const selection = await selectBestWorker(projectId, requiredCapability);
+      if (!selection) {
+        res.status(409).json({
+          detail: 'No eligible worker available for smart dispatch',
+          code: 'NO_ELIGIBLE_WORKER',
+          required_capability: requiredCapability,
+        });
+        return;
+      }
+
+      const task = await createAndDispatchOrchestrationTask({
+        projectId,
+        orchestration,
+        actor,
+        title: title.value,
+        goal: goal.value,
+        assignedAgentId: selection.agentId,
+        requiredCapability,
+        dispatch: true,
+      });
+
+      res.status(201).json({
+        task_id: task.id,
+        assigned_agent_id: selection.agentId,
+        assigned_agent_name: selection.agentName,
+        selection_reason: selection.reason,
+      });
+    } catch (err) {
+      console.error('Smart dispatch task error:', err);
       res.status(500).json({ detail: 'Internal server error' });
     }
   },
@@ -2126,6 +2123,145 @@ async function dispatchTaskToAssignedAgent(input: {
       ? { retry_count: task.retryCount ?? 0, max_retries: task.maxRetries ?? 2 }
       : null,
   });
+}
+
+/**
+ * Shared create+dispatch core for orchestration tasks. Used by both the explicit
+ * POST .../tasks route (PM picks the worker) and the smart-dispatch route (the
+ * platform auto-selects the worker). Creates the task row inside a transaction,
+ * writes the worker_task / worker_context / TASK.md artifacts, refreshes the
+ * task ledger, then dispatches to the assigned agent + emits task_dispatched.
+ *
+ * Caller is responsible for any pre-dispatch validation (auth, dedup, agent
+ * dispatchability). Returns the created (and possibly dispatched) task.
+ */
+async function createAndDispatchOrchestrationTask(input: {
+  projectId: string;
+  orchestration: ProjectOrchestration;
+  actor: { userId: string | null; agentId: string | null; actorId: string };
+  title: string;
+  goal: string;
+  assignedAgentId: string | null;
+  requiredCapability: string | null;
+  scope?: unknown;
+  context?: unknown;
+  acceptanceCriteria?: string[];
+  dependsOn?: string[];
+  priority?: number;
+  maxRetries?: number;
+  dispatch: boolean;
+}): Promise<ProjectOrchestrationTask> {
+  const { projectId, orchestration, actor, title, goal, assignedAgentId, dispatch } = input;
+  const requiredCapability = input.requiredCapability ?? null;
+  const acceptanceCriteria = input.acceptanceCriteria ?? [];
+  const dependsOn = input.dependsOn ?? [];
+  const priority = input.priority ?? 0;
+  const maxRetries = input.maxRetries ?? 2;
+  const dedupHash = computeDedupHash(title, goal);
+
+  const task = await AppDataSource.transaction(async (manager) => {
+    const taskId = randomUUID();
+    const created = manager.create(ProjectOrchestrationTask, {
+      id: taskId,
+      projectId,
+      orchestrationId: orchestration.id,
+      title,
+      goal,
+      status: dispatch
+        ? ProjectOrchestrationTaskStatus.DISPATCHED
+        : ProjectOrchestrationTaskStatus.PENDING,
+      assignedAgentId,
+      workerTaskPath: `${orchestration.basePath}/workers/${taskId}.worker_task.md`,
+      workerContextPath: `${orchestration.basePath}/workers/${taskId}.worker_context.md`,
+      acceptanceCriteria,
+      dependsOn,
+      requiredCapability,
+      priority,
+      maxRetries,
+      createdByUserId: actor.userId,
+      createdByAgentId: actor.agentId,
+      dispatchedAt: dispatch ? new Date() : undefined,
+      metadata: { dedup_hash: dedupHash },
+    });
+    await manager.save(ProjectOrchestrationTask, created);
+
+    if (orchestration.status === ProjectOrchestrationStatus.PLANNING) {
+      orchestration.status = ProjectOrchestrationStatus.RUNNING;
+      await manager.save(ProjectOrchestration, orchestration);
+    }
+
+    await upsertProjectFile(manager, {
+      projectId,
+      path: created.workerTaskPath,
+      content: renderWorkerTaskMd(orchestration, created, input.scope),
+      actorId: actor.actorId,
+      message: `Dispatch worker task ${created.id}`,
+    });
+    // Inject the project's current git HEAD SHA so the worker knows the
+    // codebase baseline (best-effort; null when git backend isn't populated).
+    let workerGitHead: string | null = null;
+    try {
+      const { gitHeadSha } = await import('../services/project-git.service');
+      workerGitHead = await gitHeadSha(projectId);
+    } catch { /* git not initialized yet */ }
+    await upsertProjectFile(manager, {
+      projectId,
+      path: created.workerContextPath,
+      content: renderWorkerContextMd(orchestration, created, input.context, workerGitHead),
+      actorId: actor.actorId,
+      message: `Create worker context ${created.id}`,
+    });
+
+    // ── MD artifact: TASK.md ──────────────────────────────────────────
+    const scopeText = typeof input.scope === 'string' && (input.scope as string).trim()
+      ? (input.scope as string).trim()
+      : 'Use the task goal and context. Keep changes scoped.';
+    await writeTaskMd(manager, orchestration, created, scopeText);
+
+    // Store task artifact paths in metadata
+    const taskDir = taskMdDir(orchestration.basePath, created.id);
+    setMdArtifactPaths(created, {
+      task_dir: taskDir,
+      task: `${taskDir}/TASK.md`,
+    });
+    await manager.save(ProjectOrchestrationTask, created);
+
+    await refreshTaskLedger(manager, orchestration, actor.actorId);
+
+    return created;
+  });
+
+  publishTaskStatusChanged(orchestration.sessionId, projectId, task, null);
+
+  if (task.status === ProjectOrchestrationTaskStatus.DISPATCHED) {
+    await dispatchTaskToAssignedAgent({
+      projectId,
+      orchestration,
+      task,
+      actorId: actor.actorId,
+      retry: false,
+    });
+
+    try {
+      if (orchestration.sessionId) {
+        eventStreamService.publish(orchestration.sessionId, {
+          projectId,
+          sessionId: orchestration.sessionId,
+          agentId: task.assignedAgentId ?? undefined,
+          type: 'task_dispatched',
+          payload: {
+            taskId: task.id,
+            agentId: task.assignedAgentId ?? undefined,
+            status: task.status,
+          },
+        });
+      }
+    } catch (streamErr) {
+      console.warn('Failed to publish task_dispatched event:', streamErr);
+    }
+  }
+
+  return task;
 }
 
 async function refreshTaskLedger(
@@ -3752,6 +3888,64 @@ function getAgentMaxConcurrent(agent: Agent): number {
     if (Number.isFinite(parsed) && parsed > 0) return parsed;
   }
   return 3;
+}
+
+/**
+ * Pick the best available worker for smart-dispatch.
+ *
+ * Eligibility: project agents with an active lifecycle, currently online (fresh
+ * heartbeat), and not smoke-unhealthy (null/legacy health is allowed). When a
+ * required capability is given, the agent must declare it. Among the eligible
+ * agents, the one with the fewest in-flight (active: dispatched/running/
+ * changes_requested) tasks wins; ties break by agent name for determinism.
+ *
+ * Returns null when no agent is eligible (caller emits 409).
+ */
+async function selectBestWorker(
+  projectId: string,
+  requiredCapability: string | null,
+): Promise<{ agentId: string; agentName: string; reason: string } | null> {
+  const agents = await AppDataSource.getRepository(Agent).find({
+    where: { projectId, lifecycleStatus: AgentLifecycleStatus.ACTIVE },
+  });
+
+  // (1) online + healthy, (2) capability filter
+  const eligible = agents.filter((agent) => {
+    const presence = getAgentPresence(agent);
+    if (!presence.isOnline) return false;
+    if (agent.healthStatus === AgentSmokeHealth.UNHEALTHY) return false;
+    if (requiredCapability && !normalizeCapabilities(agent.capabilities).includes(requiredCapability)) {
+      return false;
+    }
+    return true;
+  });
+
+  if (eligible.length === 0) return null;
+
+  // (3) fewest in-flight (active) tasks
+  const activeTasks = await AppDataSource.getRepository(ProjectOrchestrationTask).find({
+    where: { projectId, status: In(TASK_DEDUP_ACTIVE_STATUSES) },
+  });
+  const activeCountByAgent = new Map<string, number>();
+  for (const t of activeTasks) {
+    if (!t.assignedAgentId) continue;
+    activeCountByAgent.set(t.assignedAgentId, (activeCountByAgent.get(t.assignedAgentId) ?? 0) + 1);
+  }
+
+  const ranked = eligible
+    .map((agent) => ({ agent, load: activeCountByAgent.get(agent.id) ?? 0 }))
+    .sort((a, b) => {
+      if (a.load !== b.load) return a.load - b.load;     // fewest in-flight first
+      return a.agent.name.localeCompare(b.agent.name);   // deterministic tie-break
+    });
+
+  const best = ranked[0];
+  const capabilityClause = requiredCapability ? `, ${requiredCapability}-capable` : '';
+  const reason =
+    `fewest active tasks (${best.load}) among ${eligible.length} online, healthy` +
+    `${capabilityClause} worker${eligible.length === 1 ? '' : 's'}`;
+
+  return { agentId: best.agent.id, agentName: best.agent.name, reason };
 }
 
 function computeAverageDurationMinutes(
