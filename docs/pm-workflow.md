@@ -62,3 +62,18 @@ PM executor 每 30s：
 - `cli/zz_cli/executor.py` — executor daemon（支持 `--pm-only`）
 - `backend/src/services/event-stream.service.ts` — SSE 事件流（未来推送）
 - `docs/multi-agent-parallel.md` — 多 agent 并行派活
+
+## ⚠️ 必须设置 project.mainAgentId
+
+**PM executor 能 merge changeset 的前提**：项目的 `main_agent_id` 必须设为 PM agent 的 id。
+
+```bash
+# 设置（owner 用 user JWT 调用）
+curl -X PATCH "http://<platform>/v1/projects/<pid>" \
+  -H "Authorization: Bearer <user-token>" \
+  -d '{"main_agent_id":"<pm-agent-id>"}'
+```
+
+**如果不设置**：PM executor 能 review 但不能 merge（`canReviewChangeset` 要求 `project.mainAgentId === agent.id`），日志会报 "Only owner/admin or orchestration main agent can merge this"。
+
+**这是最常见的部署遗漏**——创建项目时 main_agent_id 默认为 null，必须手动设置。
