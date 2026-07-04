@@ -11,6 +11,7 @@ import {
   ProjectBranch,
   ProjectChangeset,
   ProjectChangesetStatus,
+  ProjectChangesetMergeStatus,
   ProjectChangesetComment,
   ProjectChangesetCommentStatus,
   ProjectChangesetCommentAuthorType,
@@ -1685,30 +1686,9 @@ router.post(
         res.status(401).json({ detail: 'Authentication required' });
         return;
       }
-      const result = await AppDataSource.transaction(async (manager) => {
-        const changeset = await manager.findOne(ProjectChangeset, {
-          where: { id: req.params.changeset_id, projectId: req.params.project_id },
-        });
-        if (!changeset) return { missing: true as const };
-        if (!isChangesetCreator(changeset, actor) && !await canReviewChangeset(req, changeset)) {
-          return { forbidden: true as const };
-        }
-        if ([ProjectChangesetStatus.MERGED, ProjectChangesetStatus.REJECTED, ProjectChangesetStatus.CANCELLED].includes(changeset.status)) {
-          return { closed: true as const };
-        }
-        const branch = await manager.findOneByOrFail(ProjectBranch, { id: changeset.branchId, projectId: req.params.project_id });
-        const conflicts = await detectFileConflicts(manager, req.params.project_id, changeset.fileOps);
-        if (conflicts.length > 0) {
-          changeset.status = ProjectChangesetStatus.CONFLICT;
-          changeset.conflicts = conflicts;
-          await writeConflictReport(manager, changeset, conflicts, actor);
-          return { conflict: true as const, changeset: await manager.save(ProjectChangeset, changeset) };
-        }
-        changeset.baseCommitId = branch.headCommitId ?? null;
-        changeset.status = ProjectChangesetStatus.SUBMITTED;
-        changeset.conflicts = null;
-        return { ok: true as const, changeset: await manager.save(ProjectChangeset, changeset) };
-      });
+      const result = await AppDataSource.transaction(async (manager) =>
+        rebaseChangeset(manager, req.params.project_id, req.params.changeset_id, actor, req),
+      );
 
       if ('missing' in result) {
         res.status(404).json({ detail: 'Changeset not found' });
@@ -1723,12 +1703,49 @@ router.post(
         return;
       }
       if ('conflict' in result) {
-        res.status(409).json({ detail: 'Changeset still has conflicts', changeset: serializeChangeset(result.changeset) });
+        res.status(409).json({ detail: 'Changeset has conflicts', conflicts: result.conflicts, changeset: serializeChangeset(result.changeset) });
         return;
       }
       res.json(serializeChangeset(result.changeset));
     } catch (err) {
       console.error('Rebase changeset error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+router.post(
+  '/v1/projects/:project_id/changesets/:changeset_id/preflight',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const changesetId = req.params.changeset_id;
+      const changeset = await AppDataSource.getRepository(ProjectChangeset).findOne({
+        where: { id: changesetId, projectId },
+      });
+      if (!changeset) {
+        res.status(404).json({ detail: 'Changeset not found' });
+        return;
+      }
+      if ([ProjectChangesetStatus.MERGED, ProjectChangesetStatus.CANCELLED, ProjectChangesetStatus.REJECTED].includes(changeset.status)) {
+        res.status(409).json({ detail: 'Changeset is closed' });
+        return;
+      }
+
+      const result = await runChangesetPreflight(projectId, changeset);
+      changeset.mergeStatus = result.mergeStatus;
+      const saved = await AppDataSource.getRepository(ProjectChangeset).save(changeset);
+
+      res.json({
+        merge_status: result.mergeStatus,
+        issues: result.issues,
+        changeset: serializeChangeset(saved),
+      });
+    } catch (err) {
+      console.error('Changeset preflight error:', err);
       res.status(500).json({ detail: 'Internal server error' });
     }
   },
@@ -2013,6 +2030,121 @@ async function rollbackToCommit(
   return { commit, changedFiles };
 }
 
+type PreflightResult = {
+  mergeStatus: ProjectChangesetMergeStatus;
+  issues: Array<Record<string, unknown>>;
+};
+
+async function runChangesetPreflight(
+  projectId: string,
+  changeset: ProjectChangeset,
+): Promise<PreflightResult> {
+  const manager = AppDataSource.manager;
+  const branch = await manager.findOne(ProjectBranch, {
+    where: { id: changeset.branchId, projectId },
+  });
+
+  // If the branch head has moved past the changeset's base commit, the changeset
+  // needs to be rebased before it can be evaluated for merge.
+  if (branch && (branch.headCommitId ?? null) !== (changeset.baseCommitId ?? null)) {
+    return {
+      mergeStatus: ProjectChangesetMergeStatus.NEEDS_REBASE,
+      issues: [{
+        path: '*',
+        reason: 'branch head has advanced; rebase before merge',
+        base_commit_id: changeset.baseCommitId ?? null,
+        current_head_commit_id: branch.headCommitId ?? null,
+      }],
+    };
+  }
+
+  const conflicts: Array<Record<string, unknown>> = [];
+  const staleIssues: Array<Record<string, unknown>> = [];
+
+  for (const op of changeset.fileOps) {
+    const current = await manager.findOne(ProjectFile, {
+      where: { projectId, path: op.path, deletedAt: IsNull() },
+    });
+
+    if ((op.op === 'delete' || op.op === 'rename') && !op.base_revision_id) {
+      conflicts.push({
+        path: op.path,
+        op: op.op,
+        reason: 'base_revision_id is required for delete and rename operations',
+      });
+      continue;
+    }
+    if ((op.op === 'delete' || op.op === 'rename') && !current) {
+      conflicts.push({
+        path: op.path,
+        op: op.op,
+        reason: 'file does not exist',
+      });
+      continue;
+    }
+    if (current && !op.base_revision_id) {
+      conflicts.push({
+        path: op.path,
+        reason: 'base_revision_id is required when editing an existing file',
+        current_revision_id: current.currentRevisionId ?? null,
+      });
+      continue;
+    }
+    if (!current && op.base_revision_id) {
+      conflicts.push({
+        path: op.path,
+        reason: 'base_revision_id was supplied but the file does not exist',
+        base_revision_id: op.base_revision_id,
+      });
+      continue;
+    }
+    if (current && op.base_revision_id && current.currentRevisionId !== op.base_revision_id) {
+      // The file was modified after the changeset's base revision. This is a
+      // stale base, not a structural conflict.
+      staleIssues.push({
+        path: op.path,
+        reason: 'base_revision_id is stale',
+        base_revision_id: op.base_revision_id,
+        current_revision_id: current.currentRevisionId ?? null,
+      });
+      continue;
+    }
+    if (op.op === 'rename') {
+      const target = await manager.findOne(ProjectFile, {
+        where: { projectId, path: op.to_path!, deletedAt: IsNull() },
+      });
+      if (target) {
+        conflicts.push({
+          path: op.path,
+          to_path: op.to_path,
+          op: op.op,
+          reason: 'rename target already exists',
+          target_file_id: target.id,
+        });
+      }
+    }
+  }
+
+  if (conflicts.length > 0) {
+    return {
+      mergeStatus: ProjectChangesetMergeStatus.CONFLICT,
+      issues: conflicts,
+    };
+  }
+
+  if (staleIssues.length > 0) {
+    return {
+      mergeStatus: ProjectChangesetMergeStatus.STALE,
+      issues: staleIssues,
+    };
+  }
+
+  return {
+    mergeStatus: ProjectChangesetMergeStatus.CLEAN,
+    issues: [],
+  };
+}
+
 async function detectFileConflicts(
   manager: EntityManager,
   projectId: string,
@@ -2080,6 +2212,210 @@ async function detectFileConflicts(
     }
   }
   return conflicts;
+}
+
+function computeChangedLineRanges(base: string, target: string): Array<{ start: number; end: number }> {
+  const baseLines = base.split('\n');
+  const targetLines = target.split('\n');
+
+  let prefix = 0;
+  while (prefix < baseLines.length && prefix < targetLines.length && baseLines[prefix] === targetLines[prefix]) {
+    prefix++;
+  }
+
+  let suffix = 0;
+  while (
+    suffix < baseLines.length - prefix &&
+    suffix < targetLines.length - prefix &&
+    baseLines[baseLines.length - 1 - suffix] === targetLines[targetLines.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+
+  const start = prefix;
+  const end = baseLines.length - suffix;
+  if (start >= end && baseLines.length === targetLines.length) {
+    return [];
+  }
+  return [{ start, end }];
+}
+
+function lineRangesOverlap(
+  a: Array<{ start: number; end: number }>,
+  b: Array<{ start: number; end: number }>,
+): boolean {
+  for (const ra of a) {
+    for (const rb of b) {
+      if (ra.start < rb.end && rb.start < ra.end) return true;
+    }
+  }
+  return false;
+}
+
+type RebaseChangesetResult =
+  | { ok: true; changeset: ProjectChangeset }
+  | { conflict: true; changeset: ProjectChangeset; conflicts: Array<Record<string, unknown>> }
+  | { missing: true }
+  | { forbidden: true }
+  | { closed: true };
+
+async function rebaseChangeset(
+  manager: EntityManager,
+  projectId: string,
+  changesetId: string,
+  actor: Actor,
+  req: Request,
+): Promise<RebaseChangesetResult> {
+  const changeset = await manager.findOne(ProjectChangeset, {
+    where: { id: changesetId, projectId },
+  });
+  if (!changeset) return { missing: true };
+  if (!isChangesetCreator(changeset, actor) && !await canReviewChangeset(req, changeset)) {
+    return { forbidden: true };
+  }
+  if ([ProjectChangesetStatus.MERGED, ProjectChangesetStatus.REJECTED, ProjectChangesetStatus.CANCELLED].includes(changeset.status)) {
+    return { closed: true };
+  }
+
+  const branch = await manager.findOneByOrFail(ProjectBranch, { id: changeset.branchId, projectId });
+  const conflicts: Array<Record<string, unknown>> = [];
+  const rebasedFileOps: ProjectChangesetFileOp[] = [];
+
+  for (const op of changeset.fileOps) {
+    if (op.op === 'delete') {
+      const current = await manager.findOne(ProjectFile, { where: { projectId, path: op.path, deletedAt: IsNull() } });
+      if (!current) {
+        conflicts.push({ path: op.path, op: 'delete', reason: 'file does not exist' });
+        continue;
+      }
+      if (op.base_revision_id && current.currentRevisionId !== op.base_revision_id) {
+        conflicts.push({
+          path: op.path,
+          op: 'delete',
+          reason: 'file was modified after base revision',
+          base_revision_id: op.base_revision_id,
+          current_revision_id: current.currentRevisionId ?? null,
+        });
+        continue;
+      }
+      rebasedFileOps.push(op);
+      continue;
+    }
+
+    if (op.op === 'rename') {
+      const current = await manager.findOne(ProjectFile, { where: { projectId, path: op.path, deletedAt: IsNull() } });
+      if (!current) {
+        conflicts.push({ path: op.path, op: 'rename', reason: 'file does not exist' });
+        continue;
+      }
+      if (op.base_revision_id && current.currentRevisionId !== op.base_revision_id) {
+        conflicts.push({
+          path: op.path,
+          op: 'rename',
+          reason: 'file was modified after base revision',
+          base_revision_id: op.base_revision_id,
+          current_revision_id: current.currentRevisionId ?? null,
+        });
+        continue;
+      }
+      const target = await manager.findOne(ProjectFile, { where: { projectId, path: op.to_path!, deletedAt: IsNull() } });
+      if (target) {
+        conflicts.push({
+          path: op.path,
+          to_path: op.to_path,
+          op: 'rename',
+          reason: 'rename target already exists',
+          target_file_id: target.id,
+        });
+        continue;
+      }
+      rebasedFileOps.push(op);
+      continue;
+    }
+
+    // upsert
+    const current = await manager.findOne(ProjectFile, { where: { projectId, path: op.path, deletedAt: IsNull() } });
+
+    if (!op.base_revision_id) {
+      if (current) {
+        conflicts.push({
+          path: op.path,
+          op: 'upsert',
+          reason: 'file already exists without base_revision_id',
+          current_revision_id: current.currentRevisionId ?? null,
+        });
+      } else {
+        rebasedFileOps.push(op);
+      }
+      continue;
+    }
+
+    if (!current) {
+      conflicts.push({
+        path: op.path,
+        op: 'upsert',
+        reason: 'base_revision_id was supplied but the file does not exist',
+        base_revision_id: op.base_revision_id,
+      });
+      continue;
+    }
+
+    if (current.currentRevisionId === op.base_revision_id) {
+      // Still fresh: keep the op as-is.
+      rebasedFileOps.push(op);
+      continue;
+    }
+
+    // Stale base: fetch base revision content and compare line ranges.
+    const baseRevision = await manager.findOne(ProjectFileRevision, {
+      where: { id: op.base_revision_id, projectId, path: op.path },
+    });
+    if (!baseRevision) {
+      conflicts.push({
+        path: op.path,
+        op: 'upsert',
+        reason: 'base revision not found',
+        base_revision_id: op.base_revision_id,
+      });
+      continue;
+    }
+
+    const otherChanges = computeChangedLineRanges(baseRevision.content, current.content);
+    const changesetChanges = computeChangedLineRanges(baseRevision.content, op.content ?? '');
+
+    if (lineRangesOverlap(otherChanges, changesetChanges)) {
+      conflicts.push({
+        path: op.path,
+        op: 'upsert',
+        reason: 'content changed on the same lines as the changeset',
+        base_revision_id: op.base_revision_id,
+        current_revision_id: current.currentRevisionId ?? null,
+        changed_lines_overlap: true,
+      });
+      continue;
+    }
+
+    // No overlap: best-effort auto-update the file_op to the current revision.
+    rebasedFileOps.push({
+      ...op,
+      base_revision_id: current.currentRevisionId ?? null,
+    });
+  }
+
+  if (conflicts.length > 0) {
+    changeset.status = ProjectChangesetStatus.CONFLICT;
+    changeset.conflicts = conflicts;
+    changeset.mergeStatus = ProjectChangesetMergeStatus.CONFLICT;
+    await writeConflictReport(manager, changeset, conflicts, actor);
+    return { conflict: true, changeset: await manager.save(ProjectChangeset, changeset), conflicts };
+  }
+
+  changeset.fileOps = rebasedFileOps;
+  changeset.baseCommitId = branch.headCommitId ?? null;
+  changeset.status = ProjectChangesetStatus.SUBMITTED;
+  changeset.conflicts = null;
+  changeset.mergeStatus = ProjectChangesetMergeStatus.CLEAN;
+  return { ok: true, changeset: await manager.save(ProjectChangeset, changeset) };
 }
 
 async function writeConflictReport(
@@ -3211,6 +3547,7 @@ function serializeChangeset(changeset: ProjectChangeset) {
     title: changeset.title,
     description: changeset.description ?? null,
     status: changeset.status,
+    merge_status: changeset.mergeStatus ?? null,
     file_ops: changeset.fileOps,
     conflicts: changeset.conflicts ?? null,
     result_path: changeset.resultPath ?? null,
