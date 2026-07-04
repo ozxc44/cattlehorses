@@ -711,11 +711,14 @@ class ExecutorDaemon:
         print(f"  ✓ produced ({len(result_md)} chars)", flush=True)
 
         # Detect and submit code changes (if the handler's CLI modified files)
-        code_changes = self.detect_code_changes()
-        if code_changes:
-            self.submit_code_changeset(pid, oid, tid, code_changes)
-        else:
-            print(f"  (no code changes detected in working dir)", flush=True)
+        try:
+            code_changes = self.detect_code_changes()
+            if code_changes:
+                self.submit_code_changeset(pid, oid, tid, code_changes)
+            else:
+                print(f"  (no code changes detected in working dir)", flush=True)
+        except Exception as ce:
+            print(f"  ⚠ code change detection skipped: {ce}", flush=True)
 
         submit = self.submit_task(pid, oid, tid, result_md, result.get('evidence'))
         if submit.get('_error'):
