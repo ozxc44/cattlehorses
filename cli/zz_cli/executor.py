@@ -186,6 +186,10 @@ class ExecutorDaemon:
         self.api_key = api_key
         self.handler_cmd = handler_cmd
         self.interval = interval
+        # R17: all workspace paths derive from ZZ_PROJECT_DIR so parallel workers
+        # can use isolated directories (/tmp/zz-workspace-<name>). Falls back to
+        # the process cwd when unset (legacy single-workspace behavior).
+        self.project_dir = os.environ.get('ZZ_PROJECT_DIR') or os.getcwd()
         self.manual = manual
         self.pm_only = pm_only
         self.worker_only = worker_only
@@ -733,7 +737,9 @@ class ExecutorDaemon:
     # WORKING COPY SYNC: keep the worker base fresh with the platform HEAD.
     # ═══════════════════════════════════════════════════
 
-    def sync_base(self, working_copy='/tmp/zz-workspace', project_id=None):
+    def sync_base(self, working_copy=None, project_id=None):
+        if working_copy is None:
+            working_copy = self.project_dir
         """Refresh the worker working copy to the platform's current git HEAD.
 
         Detects the local git HEAD, compares it to the platform HEAD, and resets
@@ -936,7 +942,9 @@ class ExecutorDaemon:
     # SMOKE TEST: verify the configured handler can run a real (tiny) task.
     # ═══════════════════════════════════════════════════
 
-    def run_smoke_test(self, working_copy='/tmp/zz-workspace'):
+    def run_smoke_test(self, working_copy=None):
+        if working_copy is None:
+            working_copy = self.project_dir
         """Run a minimal end-to-end task through the configured handler.
 
         Verifies the SAME handler used for real tasks (``self.handler_cmd`` via
@@ -1127,7 +1135,7 @@ class ExecutorDaemon:
         # continues — a missing git binary or non-git cwd must not block execution.
         self.project_id = pid or self.project_id
         try:
-            self.sync_base(working_copy='/tmp/zz-workspace')
+            self.sync_base(working_copy=self.project_dir)
         except Exception as e:
             print(f"  ⚠ sync_base failed, continuing: {e}", flush=True)
 
