@@ -60,18 +60,23 @@ def main() -> None:
     )
     print("Kimi worker+PM executor wrapper started", flush=True)
     print(f"base_url={BASE_URL} interval={INTERVAL}s mode=worker+pm handler=kimi-worker-handler.py", flush=True)
+    # R11: run a startup smoke test + periodic re-checks, mirroring daemon.run().
+    daemon._cycle_count = 0
+    daemon._maybe_run_periodic_smoke(force=True)
     while True:
         started = time.strftime("%Y-%m-%dT%H:%M:%S")
         try:
-            heartbeat_result = daemon.api("POST", "/v1/agents/heartbeat", {})
+            # Use daemon.heartbeat() so the smoke-test health is carried in body.
+            heartbeat_result = daemon.heartbeat()
             if heartbeat_result.get("_error"):
                 print(f"{started} heartbeat_error={heartbeat_result}", flush=True)
                 pending = 0
             else:
-                if not daemon.my_agent_id:
-                    daemon.my_agent_id = heartbeat_result.get("agent_id")
                 pending = heartbeat_result.get("pending_inbox_count", 0)
             daemon.run_cycle()
+            daemon._cycle_count += 1
+            if daemon.smoke_interval > 0 and daemon._cycle_count % daemon.smoke_interval == 0:
+                daemon._maybe_run_periodic_smoke()
             print(
                 f"{started} cycle_ok agent_id={daemon.my_agent_id or '-'} pending={pending}",
                 flush=True,

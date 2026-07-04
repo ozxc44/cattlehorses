@@ -25,7 +25,20 @@ import tempfile
 import textwrap
 
 MIMO_BIN = os.environ.get("MIMO_BIN", os.path.join(os.path.expanduser("~/.mimocode/bin"), "mimo"))
-WORKSPACE = os.environ.get("MIMO_INVOKE_WORKSPACE", os.getcwd())
+
+
+def _resolve_workspace() -> str:
+    for var in ("MIMO_INVOKE_WORKSPACE", "ZZ_PROJECT_DIR"):
+        val = os.environ.get(var)
+        if val:
+            return val
+    try:
+        return os.getcwd()
+    except (OSError, PermissionError):
+        return os.path.expanduser("~")
+
+
+WORKSPACE = _resolve_workspace()
 TIMEOUT_SECONDS = int(os.environ.get("MIMO_INVOKE_TIMEOUT_SECONDS", "1500"))
 
 
@@ -79,9 +92,13 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="mimo-handler-") as td:
         out_path = pathlib.Path(td) / "last-message.md"
         # mimo run: non-interactive, executes the message and exits.
+        # --dangerously-skip-permissions: auto-approve file writes under the
+        # working directory (mimo otherwise rejects external_directory writes,
+        # which breaks the worker smoke test and real task execution).
         cmd = [
             MIMO_BIN,
             "run",
+            "--dangerously-skip-permissions",
             prompt,
         ]
         env = dict(os.environ)
