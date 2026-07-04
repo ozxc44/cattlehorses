@@ -1040,9 +1040,11 @@ router.patch(
       try {
         const lockQb = queryRunner.manager
           .createQueryBuilder(ProjectOrchestrationTask, 'task')
-          .leftJoinAndSelect('task.orchestration', 'orchestration')
           .where('task.id = :id', { id: task.id });
         if (AppDataSource.options.type === 'postgres') {
+          // PostgreSQL: lock only the task row. FOR UPDATE cannot be applied
+          // to the nullable side of an outer join (orchestration), so we
+          // omit the leftJoin here and re-fetch orchestration after.
           lockQb.setLock('pessimistic_write');
         }
         const lockedTask = await lockQb.getOne();
