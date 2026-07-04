@@ -54,9 +54,13 @@ case "$AGENT_TYPE" in
 esac
 
 LABEL="${LABEL:-com.zz-agent.${AGENT_TYPE}-executor}"
-# Working directory for the executor: the project repo root, so the agent
-# operates on real code. Defaults to the current directory.
-PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
+# Working directory for the executor. On macOS, ~/Documents is protected by
+# TCC and launchd processes cannot access it. Default to a TCC-safe path.
+if [ "$(uname -s)" = "Darwin" ]; then
+  PROJECT_DIR="${PROJECT_DIR:-/tmp/zz-workspace}"
+else
+  PROJECT_DIR="${PROJECT_DIR:-$(pwd)}"
+fi
 mkdir -p "$ZZ_AGENT_HOME"
 
 fill() {
