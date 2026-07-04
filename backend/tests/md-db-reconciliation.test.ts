@@ -106,7 +106,7 @@ async function main(): Promise<void> {
         'PATCH',
         `/v1/projects/${projectId}/orchestrations/${orchestrationId}/tasks/${taskId}/review`,
         mainAgent.data.api_key,
-        { decision: 'approved', notes: 'Recon approved.' },
+        { decision: 'approved', auto_merge: false, notes: 'Recon approved.' },
       );
       assert.equal(review.status, 200);
 

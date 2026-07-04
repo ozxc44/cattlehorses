@@ -101,7 +101,7 @@ async function main(): Promise<void> {
     assert.equal(rebaseSecond.data.merge_queue.position, 1);
 
     const approveSecond = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${second.id}/review`, owner.token, {
-      decision: 'approved',
+      decision: 'approved', auto_merge: false,
     });
     assert.equal(approveSecond.status, 200);
     assert.equal(approveSecond.data.merge_queue.position, 1);
@@ -170,7 +170,7 @@ async function createApprovedChangeset(
   });
   assert.equal(changeset.status, 201);
   const review = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${changeset.data.id}/review`, token, {
-    decision: 'approved',
+    decision: 'approved', auto_merge: false,
   });
   assert.equal(review.status, 200);
   assert.equal(review.data.status, 'merge_ready');

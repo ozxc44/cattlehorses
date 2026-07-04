@@ -55,7 +55,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${changeset1.data.id}/review`,
       owner.token,
-      { decision: 'approved', notes: 'Looks good.' },
+      { decision: 'approved', notes: 'Looks good.', auto_merge: false },
     );
     assert.equal(approved1.status, 200);
     assert.equal(approved1.data.status, 'merge_ready');
@@ -137,7 +137,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${changesetStale.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approvedStale.status, 200);
 
@@ -174,7 +174,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${changeset2.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approved2.status, 200);
     const merged2 = await api(
@@ -218,7 +218,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${parallelA.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approvedParallelA.status, 200);
     const approvedParallelB = await api(
@@ -226,7 +226,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${parallelB.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approvedParallelB.status, 200);
 
@@ -263,7 +263,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${parallelB.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(reapprovedParallelB.status, 200);
     const mergedParallelB = await api(
@@ -370,7 +370,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${csToApprove.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveCs.status, 200);
     const mergeCs = await api(
@@ -387,7 +387,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${csToApprove.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(reReviewMerged.status, 409);
     const reMergeMerged = await api(
@@ -491,7 +491,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${deleteCs.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(deleteReview.status, 200);
     const deleteMerge = await api(
@@ -553,7 +553,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${renameCs.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(renameReview.status, 200);
     const renameMerge = await api(
@@ -605,7 +605,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${staleDeleteCs.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(staleDeleteReview.status, 200);
     const staleDeleteMerge = await api(

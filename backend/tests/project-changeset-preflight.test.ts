@@ -114,7 +114,7 @@ async function main(): Promise<void> {
     });
     check('create advance changeset', advanceCs.status, 201);
 
-    const advanceReview = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${advanceCs.data.id}/review`, owner.token, { decision: 'approved' });
+    const advanceReview = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${advanceCs.data.id}/review`, owner.token, { decision: 'approved', auto_merge: false });
     check('approve advance changeset', advanceReview.status, 200);
 
     const advanceMerge = await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${advanceCs.data.id}/merge`, owner.token);

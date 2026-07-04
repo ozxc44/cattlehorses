@@ -133,7 +133,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${branchProjectId}/changesets/${mainChangeset.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveMain.status, 200);
     const mergeMain = await api(
@@ -208,7 +208,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${branchProjectId}/changesets/${updateChangeset.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveUpdate.status, 200);
     const mergeUpdate = await api(

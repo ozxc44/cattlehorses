@@ -41,7 +41,7 @@ async function main(): Promise<void> {
     });
     assert.equal(seedChangeset.status, 201);
     const seedReview = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${seedChangeset.data.id}/review`, owner.token, {
-      decision: 'approved',
+      decision: 'approved', auto_merge: false,
     });
     assert.equal(seedReview.status, 200);
     const seedMerge = await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${seedChangeset.data.id}/merge`, owner.token);

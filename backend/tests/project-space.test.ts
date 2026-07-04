@@ -429,7 +429,7 @@ async function main(): Promise<void> {
 
     // approve
     const reviewCs = await api(baseUrl, 'PATCH', `/v1/projects/${project.data.id}/changesets/${cs.data.id}/review`, owner.token, {
-      decision: 'approved',
+      decision: 'approved', auto_merge: false,
     });
     assert.equal(reviewCs.status, 200);
 
@@ -1326,7 +1326,7 @@ async function main(): Promise<void> {
     assert.equal(snapshotCs.status, 201);
 
     const snapshotReview = await api(baseUrl, 'PATCH', `/v1/projects/${inlineProject.data.id}/changesets/${snapshotCs.data.id}/review`, owner.token, {
-      decision: 'approved',
+      decision: 'approved', auto_merge: false,
     });
     assert.equal(snapshotReview.status, 200);
 

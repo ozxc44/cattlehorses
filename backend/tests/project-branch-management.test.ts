@@ -142,7 +142,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${seedChangeset.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveSeed.status, 200);
     const mergeSeed = await api(
@@ -172,7 +172,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${deleteChangeset.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveDelete.status, 200);
     const mergeDelete = await api(
@@ -222,7 +222,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${modifyChangeset.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveModify.status, 200);
     const mergeModify = await api(
@@ -259,7 +259,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${renameSeed.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveRenameSeed.status, 200);
     const mergeRenameSeed = await api(
@@ -293,7 +293,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${renameChangeset.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveRename.status, 200);
     const mergeRename = await api(
@@ -671,7 +671,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${reviewedChangeset.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveReviewedChangeset.status, 200);
 
@@ -704,7 +704,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${blockedByRequiredApprovals.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveBlockedByRequiredApprovals.status, 200);
     assert.equal(approveBlockedByRequiredApprovals.data.review_summary?.current_approvals, 1);
@@ -716,7 +716,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${blockedByRequiredApprovals.data.id}/review`,
       owner.token,
-      { decision: 'approved', notes: 'Owner updates the existing approval.' },
+      { decision: 'approved', auto_merge: false, notes: 'Owner updates the existing approval.' },
     );
     assert.equal(duplicateOwnerApproval.status, 200);
     assert.equal(duplicateOwnerApproval.data.review_summary?.current_approvals, 1);
@@ -738,7 +738,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${blockedByRequiredApprovals.data.id}/review`,
       viewer.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(viewerCannotApproveProtectedChangeset.status, 403);
 
@@ -747,7 +747,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${blockedByRequiredApprovals.data.id}/review`,
       admin.token,
-      { decision: 'approved', notes: 'Second distinct approval.' },
+      { decision: 'approved', auto_merge: false, notes: 'Second distinct approval.' },
     );
     assert.equal(adminSecondApproval.status, 200);
     assert.equal(adminSecondApproval.data.review_summary?.current_approvals, 2);
@@ -820,7 +820,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/changesets/${blockedByMissingStatusCheck.data.id}/review`,
       owner.token,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(approveBlockedByStatusCheck.status, 200);
 

@@ -123,7 +123,7 @@ async function main(): Promise<void> {
     check('worker completes task', completeByWorker.status, 200);
 
     const reviewByPm = await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/orchestrations/${orchId}/tasks/${taskId}/review`, pmKey, {
-      decision: 'approved', notes: 'lgtm',
+      decision: 'approved', auto_merge: false, notes: 'lgtm',
     });
     check('project-level main agent reviews task (orch-main is worker)', reviewByPm.status, 200);
     check('review approved', reviewByPm.data.status, 'approved');

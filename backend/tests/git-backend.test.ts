@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     check('changeset created', cs.status, 201);
     const csId = cs.data.id;
 
-    const review = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${csId}/review`, owner.token, { decision: 'approved' });
+    const review = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${csId}/review`, owner.token, { decision: 'approved', auto_merge: false });
     check('changeset approved', review.status, 200);
     const merge = await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${csId}/merge`, owner.token, {});
     check('changeset merged', merge.status, 200);
@@ -77,7 +77,7 @@ async function main(): Promise<void> {
     const cs2 = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/changesets`, key, {
       title: 'second feature', file_ops: [{ op: 'upsert', path: 'deliverables/feature2.md', content: '# second\n' }],
     });
-    await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${cs2.data.id}/review`, owner.token, { decision: 'approved' });
+    await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${cs2.data.id}/review`, owner.token, { decision: 'approved', auto_merge: false });
     await api(baseUrl, 'POST', `/v1/projects/${projectId}/changesets/${cs2.data.id}/merge`, owner.token, {});
     const log2 = await gitLog(projectId, 10);
     check('git log has 2 commits after second merge', log2.length, 2);

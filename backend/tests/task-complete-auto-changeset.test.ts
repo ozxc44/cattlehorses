@@ -70,7 +70,7 @@ async function main(): Promise<void> {
 
     // ── 2. pm reviews + merges it (Phase 1 unlock + auto-cs integration) ─
     const review = await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${cs.id}/review`, pmKey, {
-      decision: 'approved', notes: 'accepted',
+      decision: 'approved', auto_merge: false, notes: 'accepted',
     });
     check('pm reviews auto-changeset', review.status, 200);
     check('changeset merge_ready', review.data.status, 'merge_ready');
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
 
     // ── 3. pm approves the task itself (full acceptance loop) ────────────
     const taskReview = await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/orchestrations/${orchId}/tasks/${taskId}/review`, pmKey, {
-      decision: 'approved', notes: 'shipped',
+      decision: 'approved', auto_merge: false, notes: 'shipped',
     });
     check('pm approves task', taskReview.status, 200);
     check('task approved', taskReview.data.status, 'approved');

@@ -118,7 +118,7 @@ async function main(): Promise<void> {
         `/v1/projects/${projectId}/orchestrations/${orchestrationId}/tasks/${taskId}/review`,
         mainAgent.data.api_key,
         {
-          decision: 'approved',
+          decision: 'approved', auto_merge: false,
           notes: 'All good — traceability verified.',
         },
       );

@@ -254,7 +254,7 @@ async function main(): Promise<void> {
       baseUrl, 'PATCH',
       `/v1/projects/${projectId}/orchestrations/${orchestration.data.id}/tasks/${task.data.id}/review`,
       mainAgent.data.api_key,
-      { decision: 'approved', notes: 'Looks good' },
+      { decision: 'approved', auto_merge: false, notes: 'Looks good' },
     );
     assert.equal(approveReview.status, 200);
 

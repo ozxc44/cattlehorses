@@ -400,7 +400,7 @@ async function main(): Promise<void> {
     });
     assert.equal(linkedChangeset.status, 201);
     const approvedLinkedChangeset = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${linkedChangeset.data.id}/review`, owner.token, {
-      decision: 'approved',
+      decision: 'approved', auto_merge: false,
       notes: 'Linked task changeset approved.',
     });
     assert.equal(approvedLinkedChangeset.status, 200);
@@ -553,7 +553,7 @@ async function main(): Promise<void> {
     });
     assert.equal(reviewedComplete.status, 200);
     const reviewedApproval = await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/orchestrations/${beta.data.id}/tasks/${reviewedTask.data.id}/review`, mainAgent.data.api_key, {
-      decision: 'approved',
+      decision: 'approved', auto_merge: false,
       notes: 'Approved.',
     });
     assert.equal(reviewedApproval.status, 200);

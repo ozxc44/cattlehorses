@@ -1342,6 +1342,33 @@ router.patch(
       changeset.reviewedAt = reviewedAt;
       changeset.reviewNotes = reviewNotes;
       const saved = await AppDataSource.getRepository(ProjectChangeset).save(changeset);
+
+      // ── R12a: auto-merge on approval. When the PM approves a changeset we try
+      // to take it merge_ready → merged in this same request so the autonomous
+      // loop doesn't have to hand-merge. Opt out with ?auto_merge=false (query)
+      // or { auto_merge: false } (body). On any merge failure the changeset is
+      // left merge_ready and the structured error is returned so the PM can retry
+      // via POST /merge.
+      const autoMerge = resolveAutoMergeFlag(req);
+      if (decision === 'approved' && autoMerge) {
+        const outcome = await attemptAutoMerge(req.params.project_id, saved.id, actor);
+        if (outcome.merged) {
+          res.json({
+            ...serializeChangeset(outcome.changeset),
+            auto_merged: true,
+            commit: { ...serializeCommit(outcome.commit), git_sha: outcome.gitSha ?? null },
+            gitea_sync: outcome.giteaSync,
+          });
+          return;
+        }
+        res.json({
+          ...serializeChangeset(outcome.changeset),
+          auto_merged: false,
+          merge_error: { status: outcome.error.status, ...outcome.error.body },
+        });
+        return;
+      }
+
       res.json(serializeChangeset(saved));
     } catch (err) {
       console.error('Review changeset error:', err);
@@ -1627,44 +1654,9 @@ router.post(
         res.status(409).json({ detail: 'Changeset must be merge_ready or approved before merge' });
         return;
       }
-      const targetBranch = await AppDataSource.getRepository(ProjectBranch).findOne({
-        where: { id: loaded.branchId, projectId: req.params.project_id },
-      });
-      if (!targetBranch) {
-        res.status(404).json({ detail: 'Branch not found' });
-        return;
-      }
-      const effectiveRules = await resolveEffectiveBranchProtectionRules(req.params.project_id, targetBranch);
-      const requiredApprovals = normalizeStoredRequiredApprovals(effectiveRules?.required_approvals);
-      const currentApprovals = changesetApprovalCount(loaded);
-      if (requiredApprovals > currentApprovals) {
-        res.status(409).json({
-          detail: 'Branch protection requires more approvals before merge',
-          rule: 'required_approvals',
-          required_approvals: requiredApprovals,
-          current_approvals: currentApprovals,
-        });
-        return;
-      }
-      if (normalizeStoredMergeQueueEnabled(effectiveRules?.merge_queue_enabled)) {
-        const mergeQueueBlock = await buildMergeQueueBlock(req.params.project_id, targetBranch.id, loaded);
-        if (mergeQueueBlock) {
-          res.status(409).json({
-            detail: 'Branch protection requires this changeset to be at the head of the local merge queue before merge',
-            rule: 'merge_queue',
-            ...mergeQueueBlock,
-          });
-          return;
-        }
-      }
-      const requiredStatusChecks = normalizeStoredRequiredStatusChecks(effectiveRules?.required_status_checks);
-      const statusCheckBlock = buildRequiredStatusChecksBlock(requiredStatusChecks, loaded);
-      if (statusCheckBlock) {
-        res.status(409).json({
-          detail: 'Branch protection requires passing status checks before merge',
-          rule: 'required_status_checks',
-          ...statusCheckBlock,
-        });
+      const preflight = await evaluateMergePreflight(req.params.project_id, loaded);
+      if (preflight) {
+        res.status(preflight.status).json(preflight.body);
         return;
       }
 
@@ -1677,63 +1669,7 @@ router.post(
         return;
       }
 
-      // ── Real-git backend: replay the changeset's file ops into the project's
-      // git repo and create a real git commit. Best-effort — never fails the
-      // HTTP merge (the DB commit is already the source of truth). On success
-      // we backfill ProjectCommit.gitSha so the git history is reachable.
-      let gitSha: string | null = null;
-      try {
-        const { gitAddFile, gitRemoveFile, gitCommit, gitHeadSha, gitMergeBase, gitMerge } = await import('../services/project-git.service');
-        // Record the HEAD before replay so we can detect divergence (true 3-way merge).
-        const headBefore = await gitHeadSha(req.params.project_id);
-        const ops: any[] = Array.isArray(result.changeset.fileOps) ? result.changeset.fileOps : [];
-        for (const op of ops) {
-          if (op.op === 'upsert' && typeof op.path === 'string' && typeof op.content === 'string') {
-            await gitAddFile(req.params.project_id, op.path, op.content);
-          } else if (op.op === 'delete' && typeof op.path === 'string') {
-            await gitRemoveFile(req.params.project_id, op.path);
-          } else if (op.op === 'rename' && typeof op.path === 'string' && typeof op.to_path === 'string') {
-            await gitRemoveFile(req.params.project_id, op.path);
-            if (typeof op.content === 'string') await gitAddFile(req.params.project_id, op.to_path, op.content);
-          }
-        }
-        // Commit the replayed changes. If the changeset's base differs from the
-        // pre-merge HEAD (divergent branches), this replay already advanced HEAD
-        // linearly. For a true merge commit (two parents), we'd need the changeset
-        // to have been built on a divergent ref — for now the linear replay is
-        // correct and the merge-base primitives (gitMergeBase/gitMerge) are
-        // available for future feature-branch workflows.
-        gitSha = await gitCommit(req.params.project_id, `Merge changeset ${result.changeset.id}: ${result.commit.message || ''}`.trim());
-        if (gitSha) {
-          await AppDataSource.getRepository(ProjectCommit).update({ id: result.commit.id }, { gitSha });
-          (result.commit as any).gitSha = gitSha;
-        }
-      } catch (gitErr) {
-        console.error('Git backend write failed (DB merge still succeeded):', gitErr);
-      }
-
-      const giteaSync = new GiteaSyncService();
-      const project = await AppDataSource.getRepository(Project).findOne({
-        where: { id: req.params.project_id },
-        select: ['id', 'name'],
-      });
-      const syncResult = await giteaSync.syncCommit(
-        req.params.project_id,
-        project?.name ?? req.params.project_id,
-        {
-          id: result.commit.id,
-          parentCommitId: result.commit.parentCommitId ?? null,
-          message: result.commit.message,
-          createdByUserId: result.commit.createdByUserId ?? null,
-          createdByAgentId: result.commit.createdByAgentId ?? null,
-          changedFiles: result.commit.changedFiles || [],
-          snapshot: result.commit.snapshot || {},
-          orchestrationId: result.commit.orchestrationId ?? null,
-          taskId: result.commit.taskId ?? null,
-          changesetId: result.changeset.id,
-          createdAt: result.commit.createdAt,
-        },
-      );
+      const { gitSha, giteaSync: syncResult } = await applyGitAndGiteaSync(req.params.project_id, result);
 
       res.json({
         changeset: serializeChangeset(result.changeset),
@@ -2096,6 +2032,212 @@ class WholeFileUpsertRegressionError extends Error {
     super('whole-file upsert would regress post-base additions');
     this.path = path;
     this.regressedLineCount = regressedLineCount;
+  }
+}
+
+// ── Shared merge helpers (used by POST /merge and the auto-merge path in
+//    PATCH /review). Extracted so the two entry points apply identical
+//    branch-protection preflight and git/gitea write logic. (R12a)
+
+// Branch-protection preflight: required approvals, merge queue, status checks.
+// Returns null when the changeset is clear to merge, otherwise the HTTP block
+// (status + body) the caller should respond with. Also covers a missing branch.
+async function evaluateMergePreflight(
+  projectId: string,
+  changeset: ProjectChangeset,
+): Promise<{ status: number; body: Record<string, unknown> } | null> {
+  const targetBranch = await AppDataSource.getRepository(ProjectBranch).findOne({
+    where: { id: changeset.branchId, projectId },
+  });
+  if (!targetBranch) {
+    return { status: 404, body: { detail: 'Branch not found' } };
+  }
+  const effectiveRules = await resolveEffectiveBranchProtectionRules(projectId, targetBranch);
+  const requiredApprovals = normalizeStoredRequiredApprovals(effectiveRules?.required_approvals);
+  const currentApprovals = changesetApprovalCount(changeset);
+  if (requiredApprovals > currentApprovals) {
+    return {
+      status: 409,
+      body: {
+        detail: 'Branch protection requires more approvals before merge',
+        rule: 'required_approvals',
+        required_approvals: requiredApprovals,
+        current_approvals: currentApprovals,
+      },
+    };
+  }
+  if (normalizeStoredMergeQueueEnabled(effectiveRules?.merge_queue_enabled)) {
+    const mergeQueueBlock = await buildMergeQueueBlock(projectId, targetBranch.id, changeset);
+    if (mergeQueueBlock) {
+      return {
+        status: 409,
+        body: {
+          detail: 'Branch protection requires this changeset to be at the head of the local merge queue before merge',
+          rule: 'merge_queue',
+          ...mergeQueueBlock,
+        },
+      };
+    }
+  }
+  const requiredStatusChecks = normalizeStoredRequiredStatusChecks(effectiveRules?.required_status_checks);
+  const statusCheckBlock = buildRequiredStatusChecksBlock(requiredStatusChecks, changeset);
+  if (statusCheckBlock) {
+    return {
+      status: 409,
+      body: {
+        detail: 'Branch protection requires passing status checks before merge',
+        rule: 'required_status_checks',
+        ...statusCheckBlock,
+      },
+    };
+  }
+  return null;
+}
+
+// Replay the changeset's file ops into the project's real git repo (best-effort
+// — never fails the merge; the DB commit is the source of truth) and push the
+// resulting commit through Gitea sync. Returns the git sha (if written) and the
+// gitea sync result.
+async function applyGitAndGiteaSync(
+  projectId: string,
+  result: { changeset: ProjectChangeset; commit: ProjectCommit },
+): Promise<{ gitSha: string | null; giteaSync: Awaited<ReturnType<GiteaSyncService['syncCommit']>> }> {
+  // ── Real-git backend: replay the changeset's file ops into the project's
+  // git repo and create a real git commit. Best-effort — never fails the
+  // HTTP merge (the DB commit is already the source of truth). On success
+  // we backfill ProjectCommit.gitSha so the git history is reachable.
+  let gitSha: string | null = null;
+  try {
+    const { gitAddFile, gitRemoveFile, gitCommit, gitHeadSha, gitMergeBase, gitMerge } = await import('../services/project-git.service');
+    // Record the HEAD before replay so we can detect divergence (true 3-way merge).
+    const headBefore = await gitHeadSha(projectId);
+    const ops: any[] = Array.isArray(result.changeset.fileOps) ? result.changeset.fileOps : [];
+    for (const op of ops) {
+      if (op.op === 'upsert' && typeof op.path === 'string' && typeof op.content === 'string') {
+        await gitAddFile(projectId, op.path, op.content);
+      } else if (op.op === 'delete' && typeof op.path === 'string') {
+        await gitRemoveFile(projectId, op.path);
+      } else if (op.op === 'rename' && typeof op.path === 'string' && typeof op.to_path === 'string') {
+        await gitRemoveFile(projectId, op.path);
+        if (typeof op.content === 'string') await gitAddFile(projectId, op.to_path, op.content);
+      }
+    }
+    // Commit the replayed changes. If the changeset's base differs from the
+    // pre-merge HEAD (divergent branches), this replay already advanced HEAD
+    // linearly. For a true merge commit (two parents), we'd need the changeset
+    // to have been built on a divergent ref — for now the linear replay is
+    // correct and the merge-base primitives (gitMergeBase/gitMerge) are
+    // available for future feature-branch workflows.
+    gitSha = await gitCommit(projectId, `Merge changeset ${result.changeset.id}: ${result.commit.message || ''}`.trim());
+    if (gitSha) {
+      await AppDataSource.getRepository(ProjectCommit).update({ id: result.commit.id }, { gitSha });
+      (result.commit as any).gitSha = gitSha;
+    }
+  } catch (gitErr) {
+    console.error('Git backend write failed (DB merge still succeeded):', gitErr);
+  }
+
+  const giteaSync = new GiteaSyncService();
+  const project = await AppDataSource.getRepository(Project).findOne({
+    where: { id: projectId },
+    select: ['id', 'name'],
+  });
+  const syncResult = await giteaSync.syncCommit(
+    projectId,
+    project?.name ?? projectId,
+    {
+      id: result.commit.id,
+      parentCommitId: result.commit.parentCommitId ?? null,
+      message: result.commit.message,
+      createdByUserId: result.commit.createdByUserId ?? null,
+      createdByAgentId: result.commit.createdByAgentId ?? null,
+      changedFiles: result.commit.changedFiles || [],
+      snapshot: result.commit.snapshot || {},
+      orchestrationId: result.commit.orchestrationId ?? null,
+      taskId: result.commit.taskId ?? null,
+      changesetId: result.changeset.id,
+      createdAt: result.commit.createdAt,
+    },
+  );
+  return { gitSha, giteaSync: syncResult };
+}
+
+// Auto-merge a merge_ready changeset (called from PATCH /review after an
+// approval). Runs the branch-protection preflight, then the same
+// mergeChangeset() + git/gitea write path as POST /merge. On any failure
+// (preflight block, file conflict, regression guard, branch-head change) the
+// changeset is left in merge_ready and the structured error is returned so the
+// caller can surface it and the PM can retry via POST /merge. (R12a)
+type AutoMergeOutcome =
+  | { merged: true; changeset: ProjectChangeset; commit: ProjectCommit; gitSha: string | null; giteaSync: any }
+  | { merged: false; changeset: ProjectChangeset; error: { status: number; body: Record<string, unknown> } };
+
+async function attemptAutoMerge(
+  projectId: string,
+  changesetId: string,
+  actor: Actor,
+): Promise<AutoMergeOutcome> {
+  const repo = AppDataSource.getRepository(ProjectChangeset);
+  const fresh = async () => repo.findOne({ where: { id: changesetId, projectId } });
+
+  const changeset = await fresh();
+  if (!changeset) {
+    return { merged: false, changeset: {} as ProjectChangeset, error: { status: 404, body: { detail: 'Changeset not found' } } };
+  }
+
+  const preflight = await evaluateMergePreflight(projectId, changeset);
+  if (preflight) {
+    // Preflight blocks do not mutate the changeset; it stays merge_ready.
+    return { merged: false, changeset, error: preflight };
+  }
+
+  try {
+    const result = await AppDataSource.transaction(async (manager) => mergeChangeset(manager, projectId, changesetId, actor));
+    if (result.conflict) {
+      // mergeChangeset persisted status=conflict + a conflict report. Per R12a,
+      // a failed auto-merge leaves the changeset merge_ready so the PM can retry
+      // manually; reset the status and surface the conflict as a soft error.
+      const conflictList = result.changeset.conflicts;
+      result.changeset.status = ProjectChangesetStatus.MERGE_READY;
+      result.changeset.conflicts = null;
+      const reset = await repo.save(result.changeset);
+      return {
+        merged: false,
+        changeset: reset,
+        error: {
+          status: 409,
+          body: { detail: 'Changeset has file revision conflicts', conflicts: conflictList ?? [] },
+        },
+      };
+    }
+    const { gitSha, giteaSync } = await applyGitAndGiteaSync(projectId, result);
+    return { merged: true, changeset: result.changeset, commit: result.commit, gitSha, giteaSync };
+  } catch (err) {
+    // Throws (regression guard, branch-head change, or unexpected) roll back the
+    // merge transaction, so the changeset remains merge_ready — just surface it.
+    if (err instanceof WholeFileUpsertRegressionError) {
+      return {
+        merged: false,
+        changeset: (await fresh()) ?? changeset,
+        error: {
+          status: 409,
+          body: { detail: 'whole-file upsert would regress post-base additions', path: err.path, regressed_line_count: err.regressedLineCount },
+        },
+      };
+    }
+    if (err instanceof BranchHeadChangedError) {
+      return {
+        merged: false,
+        changeset: (await fresh()) ?? changeset,
+        error: { status: 409, body: { detail: 'Branch head changed during merge; rebase the changeset and retry' } },
+      };
+    }
+    console.error('Auto-merge error:', err);
+    return {
+      merged: false,
+      changeset: (await fresh()) ?? changeset,
+      error: { status: 500, body: { detail: 'Auto-merge failed' } },
+    };
   }
 }
 
@@ -2744,6 +2886,21 @@ function getActor(req: Request): Actor | null {
   const agentId = req.agent?.id ?? null;
   const actorId = userId ?? agentId;
   return actorId ? { actorId, userId, agentId } : null;
+}
+
+// R12a: resolve the auto_merge flag for the review endpoint. Defaults to true
+// (approve auto-merges). Body takes precedence over query; opt out with
+// `false` or the string `"false"` in either.
+function resolveAutoMergeFlag(req: Request): boolean {
+  const bodyFlag = (req.body as any)?.auto_merge;
+  if (bodyFlag !== undefined) {
+    return bodyFlag !== false && bodyFlag !== 'false';
+  }
+  const queryFlag = (req.query as any)?.auto_merge;
+  if (queryFlag !== undefined) {
+    return queryFlag !== false && queryFlag !== 'false';
+  }
+  return true;
 }
 
 function validateFileOps(value: unknown): { ok: true; value: ProjectChangesetFileOp[] } | { ok: false; error: string } {

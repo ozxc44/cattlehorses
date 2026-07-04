@@ -149,7 +149,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/gate-attempts/${attempt.data.id}/review`,
       otherAgent.data.api_key,
-      { decision: 'approved' },
+      { decision: 'approved', auto_merge: false },
     );
     assert.equal(unauthorizedAgentReview.status, 403);
 
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
       'PATCH',
       `/v1/projects/${projectId}/gate-attempts/${attempt.data.id}/review`,
       ownerAgent.data.api_key,
-      { decision: 'approved', notes: 'Prefilter evidence is sufficient.' },
+      { decision: 'approved', auto_merge: false, notes: 'Prefilter evidence is sufficient.' },
     );
     assert.equal(ownerAgentReview.status, 200);
     assert.equal(ownerAgentReview.data.status, 'approved');

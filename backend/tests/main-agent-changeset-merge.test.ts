@@ -58,7 +58,7 @@ async function main(): Promise<void> {
 
     // ── 1. Project-main agent can REVIEW the changeset (Phase 1 unlock) ────
     const reviewByPm = await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${csId}/review`, pmKey, {
-      decision: 'approved', notes: 'accept deliverable',
+      decision: 'approved', auto_merge: false, notes: 'accept deliverable',
     });
     check('project-main agent reviews changeset (Phase 1 unlock)', reviewByPm.status, 200);
     check('changeset merge_ready', reviewByPm.data.status, 'merge_ready');
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
     const strangerKey = stranger.data.api_key;
     await apiWithKey(baseUrl, 'POST', '/v1/agents/heartbeat', strangerKey, {});
     const reviewByStrangerDeny = await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${cs2.data.id}/review`, strangerKey, {
-      decision: 'approved',
+      decision: 'approved', auto_merge: false,
     });
     check('non-main stranger denied reviewing changeset', reviewByStrangerDeny.status, 403);
 

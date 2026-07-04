@@ -107,7 +107,7 @@ async function createApprovedMerge(
   assert.equal(changeset.status, 201);
 
   const review = await api(baseUrl, 'PATCH', `/v1/projects/${projectId}/changesets/${changeset.data.id}/review`, token, {
-    decision: 'approved',
+    decision: 'approved', auto_merge: false,
   });
   assert.equal(review.status, 200);
 
