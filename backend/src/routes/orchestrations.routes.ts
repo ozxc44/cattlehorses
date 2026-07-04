@@ -947,21 +947,34 @@ router.post(
         } else if (nextStatus === ProjectOrchestrationTaskStatus.FAILED) {
           task.orchestration.status = ProjectOrchestrationStatus.FAILED;
           // Auto-Triage: create a fix task when retries exhausted (gk Pro R6)
+          // Loop Guard: max 3 auto-triaged fix tasks per orchestration (gk Pro R7)
           if ((task.retryCount ?? 0) >= (task.maxRetries ?? 2)) {
-            const fixTask = manager.create(ProjectOrchestrationTask, {
-              projectId: task.projectId,
-              orchestrationId: task.orchestrationId,
-              title: `Fix: ${(task.title || '').slice(0, 180)}`,
-              goal: `Previous task failed after ${task.retryCount ?? 0} retries. Original goal: ${(task.goal || '').slice(0, 300)} Review the failure and provide a corrected implementation.`,
-              status: ProjectOrchestrationTaskStatus.DISPATCHED,
-              assignedAgentId: task.assignedAgentId,
-              workerTaskPath: `.agent/orchestrations/${task.orchestrationId}/workers/auto-fix-${Date.now()}.worker_task.md`,
-              workerContextPath: `.agent/orchestrations/${task.orchestrationId}/workers/auto-fix-${Date.now()}.worker_context.md`,
-              dispatchedAt: new Date(),
-              metadata: { auto_triaged: true, source_task: task.id },
+            const existingFixTasks = await manager.getRepository(ProjectOrchestrationTask).count({
+              where: { orchestrationId: task.orchestrationId },
             });
-            await manager.save(ProjectOrchestrationTask, fixTask);
-            console.log(`[auto-triage] created fix task for failed task ${task.id}`);
+            const autoFixCount = await manager
+              .createQueryBuilder(ProjectOrchestrationTask, 't')
+              .where('t.orchestrationId = :oid', { oid: task.orchestrationId })
+              .andWhere("t.metadata LIKE '%auto_triaged%'")
+              .getCount();
+            if (autoFixCount < 3) {
+              const fixTask = manager.create(ProjectOrchestrationTask, {
+                projectId: task.projectId,
+                orchestrationId: task.orchestrationId,
+                title: `Fix: ${(task.title || '').slice(0, 180)}`,
+                goal: `Previous task failed after ${task.retryCount ?? 0} retries. Original goal: ${(task.goal || '').slice(0, 300)} Review the failure and provide a corrected implementation.`,
+                status: ProjectOrchestrationTaskStatus.DISPATCHED,
+                assignedAgentId: task.assignedAgentId,
+                workerTaskPath: `.agent/orchestrations/${task.orchestrationId}/workers/auto-fix-${Date.now()}.worker_task.md`,
+                workerContextPath: `.agent/orchestrations/${task.orchestrationId}/workers/auto-fix-${Date.now()}.worker_context.md`,
+                dispatchedAt: new Date(),
+                metadata: { auto_triaged: true, source_task: task.id, fix_round: autoFixCount + 1 },
+              });
+              await manager.save(ProjectOrchestrationTask, fixTask);
+              console.log(`[auto-triage] created fix task ${autoFixCount + 1}/3 for failed task ${task.id}`);
+            } else {
+              console.log(`[auto-triage] loop guard: max 3 fix tasks reached for orchestration ${task.orchestrationId}, stopping`);
+            }
           }
         } else if (
           task.orchestration.status === ProjectOrchestrationStatus.PLANNING ||
