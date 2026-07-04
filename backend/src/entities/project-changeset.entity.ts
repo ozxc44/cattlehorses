@@ -174,6 +174,9 @@ export class ProjectChangeset {
   mergeStatus?: ProjectChangesetMergeStatus | null;
   mergedAt?: Date;
 
+  @Column({ name: 'stale_notified_at', nullable: true })
+  staleNotifiedAt?: Date;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

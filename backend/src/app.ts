@@ -85,6 +85,15 @@ setInterval(() => {
 import { startTaskStalenessSweep } from './services/task-staleness-sweep.service';
 startTaskStalenessSweep();
 
+// R15a: start the stale-heartbeat sweep. Marks workers whose heartbeat is older
+// than the online TTL (default 90s) unhealthy so the R10b dispatch guard blocks
+// them, and notifies each project's main agent (PM). Idempotent + unref'd.
+import { startStaleHeartbeatSweep } from './services/health-monitor.service';
+startStaleHeartbeatSweep();
+
+import { startChangesetStalenessPing } from './services/changeset-staleness-ping.service';
+startChangesetStalenessPing();
+
 // ─── Middleware ──────────────────────────────────────────────────────────────
 
 app.disable('x-powered-by');
