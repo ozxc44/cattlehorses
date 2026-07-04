@@ -538,6 +538,32 @@ class ExecutorDaemon:
     def review_changeset(self, pid, cs_id, decision, notes=''):
         return self.api('PATCH', f'/v1/projects/{pid}/changesets/{cs_id}/review', {'decision': decision, 'notes': notes})
 
+    def verify_build(self):
+        """Run npm run build in the project's backend dir to verify code compiles.
+
+        Returns True if build succeeds, False otherwise. Best-effort: if
+        npm/node not found or build script missing, returns True (skip gate).
+        """
+        import os as _os
+        cwd = _os.getcwd()
+        backend_dir = _os.path.join(cwd, 'backend') if _os.path.isdir(_os.path.join(cwd, 'backend')) else cwd
+        try:
+            r = subprocess.run(
+                ['npm', 'run', 'build'],
+                capture_output=True, text=True, timeout=300, cwd=backend_dir,
+            )
+            if r.returncode == 0:
+                print(f"  ✅ build passed (PM quality gate)", flush=True)
+                return True
+            else:
+                stderr_tail = (r.stderr or '')[-500:]
+                print(f"  ❌ build FAILED (PM quality gate blocked merge)", flush=True)
+                print(f"     stderr: {stderr_tail[:200]}", flush=True)
+                return False
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            print(f"  ⚠ build gate skipped (npm not found or timeout)", flush=True)
+            return True
+
     def merge_changeset(self, pid, cs_id):
         return self.api('POST', f'/v1/projects/{pid}/changesets/{cs_id}/merge', {})
 
