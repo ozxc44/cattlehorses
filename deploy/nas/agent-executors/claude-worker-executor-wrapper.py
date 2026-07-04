@@ -52,6 +52,7 @@ if __name__ == "__main__":
         "--base-url", BASE_URL,
         "--api-key", api_key,
         "--interval", str(INTERVAL),
+        "--worker-only",
         "--handler", f"{sys.executable} {os.path.join(os.path.expanduser('~/.zz-agent'), 'claude-worker-handler.py')}",
     ]
     runpy.run_path(str(EXECUTOR_PATH), run_name="__main__")
