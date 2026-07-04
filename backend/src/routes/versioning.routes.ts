@@ -1055,6 +1055,34 @@ router.post(
         return;
       }
 
+      // Stale-base / missing-base validation. Mirrors the changeset preflight
+      // (runChangesetPreflight): every upsert on an EXISTING file must carry a
+      // base_revision_id, and that revision must still be the file's current
+      // revision. Reject at submit time so callers resubmit against a fresh base
+      // instead of persisting a changeset that can never merge cleanly.
+      for (const op of ops.value) {
+        const current = await AppDataSource.getRepository(ProjectFile).findOne({
+          where: { projectId, path: op.path, deletedAt: IsNull() },
+        });
+        if (current && !op.base_revision_id) {
+          res.status(409).json({
+            detail: 'base_revision_id required for upsert on existing file',
+            path: op.path,
+            current_revision_id: current.currentRevisionId ?? null,
+          });
+          return;
+        }
+        if (current && op.base_revision_id && current.currentRevisionId !== op.base_revision_id) {
+          res.status(409).json({
+            detail: 'stale base',
+            path: op.path,
+            base_revision_id: op.base_revision_id,
+            current_revision_id: current.currentRevisionId ?? null,
+          });
+          return;
+        }
+      }
+
       const resultPath = normalizeOptionalPath(req.body.result_path, 'result_path');
       const evidencePath = normalizeOptionalPath(req.body.evidence_path, 'evidence_path');
       if (!resultPath.ok) {

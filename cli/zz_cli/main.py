@@ -2756,6 +2756,71 @@ def agent_executor(
         daemon.run()
 
 
+@agent_app.command("sync-base")
+def agent_sync_base(
+    project_id: Optional[str] = typer.Option(
+        None, "--project", "-p", help="Project ID (defaults to configured default_project)"
+    ),
+    working_copy: str = typer.Option(
+        "/tmp/zz-workspace", "--working-copy", "-w", help="Path to the git working copy"
+    ),
+) -> None:
+    """Refresh the local worker working copy to the project's current git HEAD.
+
+    Compares the local git HEAD with the platform's real-git HEAD. If they
+    differ and the working copy is clean, fetches origin and resets hard. If
+    the working copy has uncommitted changes, it skips the reset and reports
+    that a manual sync is needed.
+    """
+    base_url = _get_base_url()
+    agent_key = os.environ.get("ZZ_AGENT_KEY") or _load_config().get("api_key") or ""
+    if not agent_key:
+        identity = _load_identity() if _get_identity_path() else {}
+        agent_key = identity.get("credentials", {}).get("agent_key", "")
+    if not agent_key:
+        console.print("[red]No agent key found. Set ZZ_AGENT_KEY or configure identity.[/red]")
+        raise typer.Exit(1)
+
+    pid = project_id or _get_project_id()
+
+    from zz_cli.executor import ExecutorDaemon
+    daemon = ExecutorDaemon(
+        base_url=base_url,
+        api_key=agent_key,
+        no_self_update=True,
+    )
+    daemon.project_id = pid
+
+    try:
+        result = daemon.sync_base(working_copy=working_copy)
+    except Exception as e:
+        console.print(f"[red]sync_base failed:[/red] {e}")
+        raise typer.Exit(1)
+
+    local_head = result.get("local_head")
+    platform_head = result.get("platform_head")
+    if result.get("error"):
+        console.print(f"[red]sync_base error:[/red] {result['error']}")
+        raise typer.Exit(1)
+    if result.get("needs_manual_sync"):
+        console.print(
+            f"[yellow]Working copy has uncommitted changes; manual sync needed.[/yellow]\n"
+            f"  local HEAD:  {local_head[:12] if local_head else '—'}\n"
+            f"  platform HEAD: {platform_head[:12] if platform_head else '—'}"
+        )
+        raise typer.Exit(2)
+    if result.get("synced"):
+        console.print(
+            f"[green]✓ Working copy reset to {platform_head[:12] if platform_head else '—'}[/green]\n"
+            f"  previous HEAD: {local_head[:12] if local_head else '—'}"
+        )
+    else:
+        console.print(
+            f"[green]✓ Working copy already up to date[/green]\n"
+            f"  HEAD: {local_head[:12] if local_head else '—'}"
+        )
+
+
 @agent_app.command("submit")
 def agent_submit(
     result: str = typer.Option(..., "--result", "-r", help="Result markdown content or @file path"),

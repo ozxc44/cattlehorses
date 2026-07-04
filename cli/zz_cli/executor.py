@@ -625,6 +625,133 @@ class ExecutorDaemon:
         return ''
 
     # ═══════════════════════════════════════════════════
+    # WORKING COPY SYNC: keep the worker base fresh with the platform HEAD.
+    # ═══════════════════════════════════════════════════
+
+    def sync_base(self, working_copy='/tmp/zz-workspace', project_id=None):
+        """Refresh the worker working copy to the platform's current git HEAD.
+
+        Detects the local git HEAD, compares it to the platform HEAD, and resets
+        hard when the copy is clean and stale. If uncommitted changes exist, it
+        skips the reset and reports needs_manual_sync=True. Git failures degrade
+        gracefully (log + continue) so a missing git binary or non-git cwd does
+        not kill the worker loop.
+
+        Returns a dict with:
+            synced, needs_manual_sync, local_head, platform_head, error
+        """
+        pid = project_id or self.project_id
+        result = {
+            'synced': False,
+            'needs_manual_sync': False,
+            'local_head': None,
+            'platform_head': None,
+            'error': None,
+        }
+        if not pid:
+            result['error'] = 'no project_id'
+            print(f"  ⚠ sync_base: no project_id", flush=True)
+            return result
+
+        try:
+            local_r = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                capture_output=True, text=True, cwd=working_copy,
+            )
+            if local_r.returncode != 0:
+                err = (local_r.stderr or '').strip() or 'git rev-parse failed'
+                result['error'] = err
+                print(f"  ⚠ sync_base: {err}", flush=True)
+                return result
+            local_head = local_r.stdout.strip()
+            result['local_head'] = local_head
+        except FileNotFoundError:
+            result['error'] = 'git binary not found'
+            print(f"  ⚠ sync_base: git binary not found", flush=True)
+            return result
+        except Exception as e:
+            result['error'] = str(e)
+            print(f"  ⚠ sync_base: {e}", flush=True)
+            return result
+
+        try:
+            # Prefer the real-git log endpoint; fall back to branch list head_commit_id.
+            platform_head = None
+            r = self.api('GET', f'/v1/projects/{pid}/git/log')
+            platform_head = r.get('head') or r.get('head_commit_id')
+            if not platform_head:
+                branches = self.api('GET', f'/v1/projects/{pid}/branches')
+                for b in branches.get('data', []):
+                    if b.get('is_default') or b.get('name') == 'main':
+                        platform_head = b.get('head_commit_id')
+                        break
+                if not platform_head and branches.get('data'):
+                    platform_head = branches['data'][0].get('head_commit_id')
+            result['platform_head'] = platform_head
+        except Exception as e:
+            result['error'] = f'platform HEAD fetch failed: {e}'
+            print(f"  ⚠ sync_base: platform HEAD fetch failed: {e}", flush=True)
+            return result
+
+        if not platform_head:
+            result['error'] = 'platform HEAD unavailable'
+            print(f"  ⚠ sync_base: platform HEAD unavailable", flush=True)
+            return result
+
+        if local_head == platform_head:
+            print(f"  ✓ sync_base: working copy already at {local_head[:12]}", flush=True)
+            return result
+
+        try:
+            status_r = subprocess.run(
+                ['git', 'status', '--porcelain'],
+                capture_output=True, text=True, cwd=working_copy,
+            )
+            dirty = bool(status_r.stdout.strip())
+        except Exception as e:
+            result['error'] = f'git status failed: {e}'
+            print(f"  ⚠ sync_base: git status failed: {e}", flush=True)
+            return result
+
+        if dirty:
+            result['needs_manual_sync'] = True
+            print(
+                f"  ⚠ sync_base: working copy has uncommitted changes "
+                f"(local {local_head[:12]} vs platform {platform_head[:12]}); "
+                f"manual sync needed", flush=True
+            )
+            return result
+
+        try:
+            fetch_r = subprocess.run(
+                ['git', 'fetch', 'origin'],
+                capture_output=True, text=True, cwd=working_copy,
+            )
+            if fetch_r.returncode != 0:
+                err = (fetch_r.stderr or '').strip() or 'git fetch failed'
+                result['error'] = err
+                print(f"  ⚠ sync_base: {err}", flush=True)
+                return result
+            reset_r = subprocess.run(
+                ['git', 'reset', '--hard', platform_head],
+                capture_output=True, text=True, cwd=working_copy,
+            )
+            if reset_r.returncode != 0:
+                err = (reset_r.stderr or '').strip() or 'git reset failed'
+                result['error'] = err
+                print(f"  ⚠ sync_base: {err}", flush=True)
+                return result
+            result['synced'] = True
+            print(
+                f"  ✓ sync_base: reset {local_head[:12]} → {platform_head[:12]}", flush=True
+            )
+            return result
+        except Exception as e:
+            result['error'] = f'git sync failed: {e}'
+            print(f"  ⚠ sync_base: git sync failed: {e}", flush=True)
+            return result
+
+    # ═══════════════════════════════════════════════════
     # EXECUTION: relay the task to the agent's own brain.
     # No brain → no execution (caller surfaces instead).
     # ═══════════════════════════════════════════════════
@@ -743,6 +870,15 @@ class ExecutorDaemon:
     # ═══════════════════════════════════════════════════
 
     def process_worker_task(self, inbox_item, pid, oid, tid):
+        # Sync the worker working copy to the platform HEAD before any task work.
+        # This prevents stale-base changesets (R8). Errors are logged and the task
+        # continues — a missing git binary or non-git cwd must not block execution.
+        self.project_id = pid or self.project_id
+        try:
+            self.sync_base(working_copy='/tmp/zz-workspace')
+        except Exception as e:
+            print(f"  ⚠ sync_base failed, continuing: {e}", flush=True)
+
         iid = inbox_item.get('id')
         self.ack_inbox(iid)
         print(f"  ✓ acked", flush=True)
