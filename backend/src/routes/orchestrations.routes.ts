@@ -955,6 +955,8 @@ router.post(
               goal: `Previous task failed after ${task.retryCount ?? 0} retries. Original goal: ${(task.goal || '').slice(0, 300)} Review the failure and provide a corrected implementation.`,
               status: ProjectOrchestrationTaskStatus.DISPATCHED,
               assignedAgentId: task.assignedAgentId,
+              workerTaskPath: `.agent/orchestrations/${task.orchestrationId}/workers/auto-fix-${Date.now()}.worker_task.md`,
+              workerContextPath: `.agent/orchestrations/${task.orchestrationId}/workers/auto-fix-${Date.now()}.worker_context.md`,
               dispatchedAt: new Date(),
               metadata: { auto_triaged: true, source_task: task.id },
             });
