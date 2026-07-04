@@ -195,7 +195,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nTask completed successfully.',
-        evidence: { verified: true },
+        evidence: { files_changed: ['inbox-result.md'], verified: true },
         status: 'ready_for_review',
       },
     );
@@ -244,7 +244,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nUpdated with verification details.',
-        evidence: { verified: true, details: 'all checks pass' },
+        evidence: { files_changed: ['inbox-result.md'], verified: true, details: 'all checks pass' },
         status: 'ready_for_review',
       },
     );
@@ -378,7 +378,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Blocked\n\nBlocked on dependency.',
-        evidence: { reason: 'dependency missing' },
+        evidence: { files_changed: [], reason: 'dependency missing' },
         status: 'blocked',
       },
     );

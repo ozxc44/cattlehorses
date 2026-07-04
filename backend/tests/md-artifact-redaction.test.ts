@@ -207,7 +207,7 @@ async function main(): Promise<void> {
             `{"password":"${colonSecret}"}`,
             '```',
           ].join('\n'),
-          evidence: { api_key: secret, note: 'safe', log: `evidence log password: ${colonSecret}` },
+          evidence: { files_changed: ['redaction.md'], api_key: secret, note: 'safe', log: `evidence log password: ${colonSecret}` },
         },
       );
       assert.equal(complete.status, 200);

@@ -83,7 +83,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nTask completed.',
-        evidence: { verified: true },
+        evidence: { files_changed: ['workload.md'], verified: true },
         status: 'ready_for_review',
       },
     );
@@ -180,7 +180,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nInitial result.',
-        evidence: { verified: false },
+        evidence: { files_changed: ['initial-result.md'], verified: false },
         status: 'ready_for_review',
       },
     );
@@ -605,7 +605,7 @@ async function runConcurrentWorkload(baseUrl: string): Promise<{
             task.workerKey,
             {
               result_md: '# Result\n\nConcurrent completion.',
-              evidence: { concurrent: true },
+              evidence: { files_changed: [`concurrent-${task.id}.md`], concurrent: true },
               status: 'ready_for_review',
             },
           );

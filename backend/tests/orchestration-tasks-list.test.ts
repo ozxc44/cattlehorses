@@ -105,7 +105,7 @@ async function main(): Promise<void> {
     assert.equal(t3Claim.status, 200);
     const t3Complete = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/orchestrations/${beta.data.id}/tasks/${t3.data.id}/complete`, workerAgent.data.api_key, {
       result_md: '# Result\n\nDone with task list verification.',
-      evidence: { ok: true },
+      evidence: { files_changed: ['task-list.md'], ok: true },
     });
     assert.equal(t3Complete.status, 200);
 
@@ -549,7 +549,7 @@ async function main(): Promise<void> {
     assert.equal(reviewedClaim.status, 200);
     const reviewedComplete = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/orchestrations/${beta.data.id}/tasks/${reviewedTask.data.id}/complete`, workerAgent.data.api_key, {
       result_md: '# Result\n\nReady for approval.',
-      evidence: { ok: true },
+      evidence: { files_changed: ['reviewed-task.md'], ok: true },
     });
     assert.equal(reviewedComplete.status, 200);
     const reviewedApproval = await apiWithKey(baseUrl, 'PATCH', `/v1/projects/${projectId}/orchestrations/${beta.data.id}/tasks/${reviewedTask.data.id}/review`, mainAgent.data.api_key, {

@@ -9,7 +9,11 @@ export { ProjectMemory, ProjectMemoryVisibility } from './project-memory.entity'
 export { ProjectJoinRequest, ProjectJoinRequestStatus } from './project-join-request.entity';
 export { ProjectFileProposal, ProjectFileProposalStatus } from './project-file-proposal.entity';
 export { ProjectOrchestration, ProjectOrchestrationStatus } from './project-orchestration.entity';
-export { ProjectOrchestrationTask, ProjectOrchestrationTaskStatus } from './project-orchestration-task.entity';
+export {
+  ProjectOrchestrationTask,
+  ProjectOrchestrationTaskStatus,
+  type ProjectOrchestrationTaskEvidence,
+} from './project-orchestration-task.entity';
 export { ProjectBranch } from './project-branch.entity';
 export { ProjectCommit } from './project-commit.entity';
 export { ProjectChangeset, ProjectChangesetStatus } from './project-changeset.entity';

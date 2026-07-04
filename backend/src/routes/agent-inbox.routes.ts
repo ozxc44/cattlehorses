@@ -66,7 +66,7 @@ router.get(
         { step: 4, action: 'Read task details', api: 'GET /v1/projects/<pid>/orchestrations/<oid>/tasks/<tid>', cli: 'zz tasks get -p <pid> -o <oid> <tid>' },
         { step: 5, action: 'Understand codebase', api: 'GET /v1/projects/<pid>/repository/search?q=<keywords>', cli: 'zz repo summary -p <pid>' },
         { step: 6, action: 'Execute (your capability)', desc: 'Use your own LLM/analysis skills to do the work' },
-        { step: 7, action: 'Submit result', api: 'POST .../tasks/<tid>/complete {"result_md":"...","evidence":{},"status":"ready_for_review"}', cli: 'zz agent submit --result @./result.md' },
+        { step: 7, action: 'Submit result', api: 'POST .../tasks/<tid>/complete {"result_md":"...","evidence":{"files_changed":[]},"status":"ready_for_review"}', cli: 'zz agent submit --result @./result.md' },
         { step: 8, action: 'Handle feedback', desc: 'If changes_requested: fix and re-submit' },
       ],
       tips: [

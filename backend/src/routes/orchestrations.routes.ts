@@ -17,6 +17,7 @@ import {
   ProjectOrchestration,
   ProjectOrchestrationStatus,
   ProjectOrchestrationTask,
+  ProjectOrchestrationTaskEvidence,
   ProjectOrchestrationTaskStatus,
   Session,
   SessionParticipant,
@@ -786,7 +787,12 @@ router.post(
         res.status(422).json({ detail: 'result_md is required' });
         return;
       }
-      const verification = await verifyTaskCompletion(task, resultMd);
+      const evidenceInput = normalizeTaskEvidence(req.body.evidence);
+      if (!evidenceInput.ok) {
+        res.status(422).json({ detail: evidenceInput.error });
+        return;
+      }
+      const verification = await verifyTaskCompletion(task, resultMd, evidenceInput.value);
       if (!verification.passed) {
         res.status(422).json({
           detail: 'Task verification failed',
@@ -827,6 +833,7 @@ router.post(
 
         task.resultPath = resultPath;
         task.evidencePath = evidencePath;
+        task.evidenceJson = evidenceInput.value;
         task.status = nextStatus;
         task.completedAt = new Date();
         // A worker submitting completion has engaged the task; backfill the claim
@@ -1382,7 +1389,7 @@ router.post(
           '1. Ack: POST /v1/agent/inbox/<inbox_id>/ack',
           '2. Claim: PATCH /v1/projects/<pid>/orchestrations/<oid>/tasks/<tid>/claim',
           '3. Read context + do the work',
-          '4. Submit: POST .../tasks/<tid>/complete {"result_md":"...","evidence":{},"status":"ready_for_review"}',
+          '4. Submit: POST .../tasks/<tid>/complete {"result_md":"...","evidence":{"files_changed":[]},"status":"ready_for_review"}',
           '5. If changes_requested, fix and re-submit',
           '',
           'CLI: zz tasks claim → zz agent submit --result @result.md',
@@ -1595,7 +1602,7 @@ async function dispatchTaskToAssignedAgent(input: {
       '3. **Read context**: GET /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id> (read goal, acceptance_criteria, worker_context_path)',
       '4. **Understand the codebase**: If .agent/code-map.md exists, it is already in your context. Use GET /v1/projects/<project_id>/repository/search?q=<keywords> to find relevant code.',
       '5. **Do the work**: Implement the goal. Use your own capabilities (LLM, code generation, analysis, etc.).',
-      '6. **Submit result**: POST /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id>/complete with body: {"result_md": "# Your result\\n...", "evidence": {<key-value evidence>}, "status": "ready_for_review"}',
+      '6. **Submit result**: POST /v1/projects/<project_id>/orchestrations/<orch_id>/tasks/<task_id>/complete with body: {"result_md": "# Your result\\n...", "evidence": {"files_changed": ["path/to/file.ts"], "test_passed": true}, "status": "ready_for_review"}',
       '7. **If changes requested**: You will receive a task_changes_requested notification. Fix the issues and re-submit via the same complete endpoint.',
       '',
       '## Quick CLI Commands',
@@ -2042,8 +2049,8 @@ function renderWorkerTaskMd(
     '## Completion Contract',
     '',
     '- Submit `result_md` with concise implementation notes and changed artifacts.',
-    '- Submit `evidence` as JSON with commands, outputs, links, or review notes.',
-    '- If blocked, submit status `blocked` with evidence.reason.',
+    '- Submit `evidence` as JSON with files_changed plus commands, outputs, links, or review notes.',
+    '- If blocked, submit status `blocked` with evidence.files_changed and evidence.reason.',
     '',
   ].join('\n');
 }
@@ -2142,6 +2149,7 @@ function serializeTask(task: ProjectOrchestrationTask) {
     worker_context_path: task.workerContextPath,
     result_path: task.resultPath ?? null,
     evidence_path: task.evidencePath ?? null,
+    evidence: task.evidenceJson ?? null,
     acceptance_criteria: task.acceptanceCriteria ?? [],
     depends_on: task.dependsOn ?? [],
     required_capability: task.requiredCapability ?? null,
@@ -2178,6 +2186,7 @@ function serializeTaskLedgerItem(task: ProjectOrchestrationTask) {
     worker_context_path: task.workerContextPath,
     result_path: task.resultPath ?? null,
     evidence_path: task.evidencePath ?? null,
+    evidence: task.evidenceJson ?? null,
     acceptance_criteria: task.acceptanceCriteria ?? [],
     depends_on: task.dependsOn ?? [],
     required_capability: task.requiredCapability ?? null,
@@ -2855,6 +2864,62 @@ function normalizeEvidence(value: unknown): Record<string, unknown> {
   if (isPlainObject(value)) return value;
   if (typeof value === 'string' && value.trim()) return { summary: value.trim() };
   return {};
+}
+
+function normalizeTaskEvidence(
+  value: unknown,
+): { ok: true; value: ProjectOrchestrationTaskEvidence | null } | { ok: false; error: string } {
+  if (value === undefined || value === null) {
+    return { ok: true, value: null };
+  }
+  if (!isPlainObject(value)) {
+    return { ok: false, error: 'evidence must be an object with files_changed array' };
+  }
+  if (!Array.isArray(value.files_changed)) {
+    return { ok: false, error: 'evidence.files_changed must be an array' };
+  }
+  const filesChanged: string[] = [];
+  for (const item of value.files_changed) {
+    if (typeof item !== 'string') {
+      return { ok: false, error: 'evidence.files_changed must contain only strings' };
+    }
+    const file = item.trim();
+    if (file) filesChanged.push(file);
+  }
+
+  const testPassed = value.test_passed;
+  if (testPassed !== undefined && testPassed !== null && typeof testPassed !== 'boolean') {
+    return { ok: false, error: 'evidence.test_passed must be boolean or null' };
+  }
+
+  const diffSummary = nullableEvidenceString(value.diff_summary, 'evidence.diff_summary');
+  if (!diffSummary.ok) return diffSummary;
+  const riskNotes = nullableEvidenceString(value.risk_notes, 'evidence.risk_notes');
+  if (!riskNotes.ok) return riskNotes;
+
+  return {
+    ok: true,
+    value: {
+      files_changed: filesChanged,
+      test_passed: testPassed === undefined ? null : testPassed,
+      diff_summary: diffSummary.value,
+      risk_notes: riskNotes.value,
+    },
+  };
+}
+
+function nullableEvidenceString(
+  value: unknown,
+  field: string,
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (value === undefined || value === null) {
+    return { ok: true, value: null };
+  }
+  if (typeof value !== 'string') {
+    return { ok: false, error: `${field} must be a string or null` };
+  }
+  const trimmed = value.trim();
+  return { ok: true, value: trimmed || null };
 }
 
 function normalizeCompletionStatus(value: unknown): ProjectOrchestrationTaskStatus | null {

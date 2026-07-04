@@ -53,7 +53,7 @@ async function main(): Promise<void> {
 
     // worker completes the task (ready_for_review).
     const complete = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/orchestrations/${orchId}/tasks/${taskId}/complete`, wkKey, {
-      result_md: '# Deliverable\nThe work is done.', evidence: { ok: true }, status: 'ready_for_review',
+      result_md: '# Deliverable\nThe work is done.', evidence: { files_changed: ['deliverables/wk/result.md'], ok: true }, status: 'ready_for_review',
     });
     check('worker completes task', complete.status, 200);
     check('task ready_for_review', complete.data.status, 'ready_for_review');

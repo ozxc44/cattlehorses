@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 
 process.env.NODE_ENV = 'test';
-process.env.JWT_SECRET = 'task-verification-gate-test-secret';
+process.env.JWT_SECRET = 'task-evidence-test-secret';
 process.env.AGENT_ONLINE_TTL_MS = '90000';
 
 async function main(): Promise<void> {
   const { AppDataSource } = await import('../src/data-source');
   const app = (await import('../src/app')).default;
+  const { ProjectOrchestrationTask } = await import('../src/entities/project-orchestration-task.entity');
   await AppDataSource.initialize();
   const server = http.createServer(app);
   await new Promise<void>((resolve) => server.listen(0, resolve));
@@ -16,20 +17,20 @@ async function main(): Promise<void> {
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
   try {
-    const owner = await register(baseUrl, 'verify-owner');
+    const owner = await register(baseUrl, 'task-evidence-owner');
     const project = await api(baseUrl, 'POST', '/v1/projects', owner.token, {
-      name: 'Task Verification Gate Test',
+      name: 'Task Evidence Test',
       visibility: 'public',
     });
     assert.equal(project.status, 201);
     const projectId = project.data.id;
 
     const mainAgent = await api(baseUrl, 'POST', `/v1/projects/${projectId}/agents`, owner.token, {
-      name: 'Verification Main Agent',
+      name: 'Evidence Main Agent',
     });
     assert.equal(mainAgent.status, 201);
     const workerAgent = await api(baseUrl, 'POST', `/v1/projects/${projectId}/agents`, owner.token, {
-      name: 'Verification Worker Agent',
+      name: 'Evidence Worker Agent',
     });
     assert.equal(workerAgent.status, 201);
     await heartbeatAgent(baseUrl, mainAgent.data.api_key);
@@ -41,8 +42,8 @@ async function main(): Promise<void> {
       `/v1/projects/${projectId}/orchestrations`,
       mainAgent.data.api_key,
       {
-        title: 'Verification Gate Orchestration',
-        objective: 'Verify deterministic task completion gates.',
+        title: 'Task Evidence Orchestration',
+        objective: 'Verify structured task evidence behavior.',
         main_agent_id: mainAgent.data.id,
         worker_agent_ids: [workerAgent.data.id],
       },
@@ -50,67 +51,70 @@ async function main(): Promise<void> {
     assert.equal(orchestration.status, 201);
     const orchestrationId = orchestration.data.id;
 
-    const shortTask = await createTask(baseUrl, projectId, orchestrationId, mainAgent.data.api_key, workerAgent.data.id, {
-      title: 'Short result task',
-      goal: 'Reject a too-short result.',
+    const storedTask = await createTask(baseUrl, projectId, orchestrationId, mainAgent.data.api_key, workerAgent.data.id, {
+      title: 'Structured evidence task',
+      goal: 'Store structured task evidence.',
     });
-    const shortComplete = await completeTask(baseUrl, projectId, orchestrationId, shortTask.data.id, workerAgent.data.api_key, 'ok');
-    assert.equal(shortComplete.status, 422);
-    assert.equal(shortComplete.data.detail, 'Task verification failed');
-    assert.equal(shortComplete.data.code, 'VERIFICATION_FAILED');
-    assert.ok(Array.isArray(shortComplete.data.failures));
-
-    const noCriteriaTask = await createTask(baseUrl, projectId, orchestrationId, mainAgent.data.api_key, workerAgent.data.id, {
-      title: 'No criteria task',
-      goal: 'Accept a long result when criteria are absent.',
-    });
-    const noCriteriaComplete = await completeTask(
+    const storedComplete = await completeTask(
       baseUrl,
       projectId,
       orchestrationId,
-      noCriteriaTask.data.id,
+      storedTask.data.id,
       workerAgent.data.api_key,
-      'This completion result is long enough.',
+      {
+        result_md: '# Result\n\nImplemented structured task evidence support.',
+        evidence: { files_changed: ['a.ts'], test_passed: true },
+      },
     );
-    assert.equal(noCriteriaComplete.status, 200);
-    assert.equal(noCriteriaComplete.data.status, 'ready_for_review');
-
-    const criteriaMissingTask = await createTask(baseUrl, projectId, orchestrationId, mainAgent.data.api_key, workerAgent.data.id, {
-      title: 'Criteria missing task',
-      goal: 'Reject a result that omits the acceptance criterion.',
-      acceptance_criteria: ['add login route'],
+    assert.equal(storedComplete.status, 200);
+    assert.deepEqual(storedComplete.data.evidence, {
+      files_changed: ['a.ts'],
+      test_passed: true,
+      diff_summary: null,
+      risk_notes: null,
     });
-    const missingCriterionComplete = await completeTask(
+    const storedRow = await AppDataSource.getRepository(ProjectOrchestrationTask).findOneByOrFail({ id: storedTask.data.id });
+    assert.deepEqual(storedRow.evidenceJson, storedComplete.data.evidence);
+
+    const emptyFilesTask = await createTask(baseUrl, projectId, orchestrationId, mainAgent.data.api_key, workerAgent.data.id, {
+      title: 'Empty changed files task',
+      goal: 'Reject changed-file claims without changed file evidence.',
+    });
+    const emptyFilesComplete = await completeTask(
       baseUrl,
       projectId,
       orchestrationId,
-      criteriaMissingTask.data.id,
+      emptyFilesTask.data.id,
       workerAgent.data.api_key,
-      'This result is long enough but omits the requested behavior.',
+      {
+        result_md: '# Result\n\nModified file behavior for structured evidence verification.',
+        evidence: { files_changed: [], test_passed: true },
+      },
     );
-    assert.equal(missingCriterionComplete.status, 422);
-    assert.equal(missingCriterionComplete.data.code, 'VERIFICATION_FAILED');
-    assert.deepEqual(missingCriterionComplete.data.failures, [
-      'Acceptance criterion not addressed: add login route',
+    assert.equal(emptyFilesComplete.status, 422);
+    assert.equal(emptyFilesComplete.data.code, 'VERIFICATION_FAILED');
+    assert.deepEqual(emptyFilesComplete.data.failures, [
+      'Evidence files_changed cannot be empty when result mentions changed or modified files',
     ]);
 
-    const criteriaSatisfiedTask = await createTask(baseUrl, projectId, orchestrationId, mainAgent.data.api_key, workerAgent.data.id, {
-      title: 'Criteria satisfied task',
-      goal: 'Accept a result that addresses the acceptance criterion.',
-      acceptance_criteria: ['add login route'],
+    const noEvidenceTask = await createTask(baseUrl, projectId, orchestrationId, mainAgent.data.api_key, workerAgent.data.id, {
+      title: 'No evidence task',
+      goal: 'Keep result-only completion backward compatible.',
     });
-    const satisfiedCriterionComplete = await completeTask(
+    const noEvidenceComplete = await completeTask(
       baseUrl,
       projectId,
       orchestrationId,
-      criteriaSatisfiedTask.data.id,
+      noEvidenceTask.data.id,
       workerAgent.data.api_key,
-      'Implemented the add login route with request validation.',
+      {
+        result_md: '# Result\n\nCompletion without structured evidence still works.',
+      },
     );
-    assert.equal(satisfiedCriterionComplete.status, 200);
-    assert.equal(satisfiedCriterionComplete.data.status, 'ready_for_review');
+    assert.equal(noEvidenceComplete.status, 200);
+    assert.equal(noEvidenceComplete.data.evidence, null);
 
-    console.log('task-verification-gate tests passed');
+    console.log('task-evidence tests passed');
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
@@ -147,7 +151,7 @@ async function completeTask(
   orchestrationId: string,
   taskId: string,
   workerAgentKey: string,
-  resultMd: string,
+  body: Record<string, unknown>,
 ) {
   return apiWithKey(
     baseUrl,
@@ -155,9 +159,8 @@ async function completeTask(
     `/v1/projects/${projectId}/orchestrations/${orchestrationId}/tasks/${taskId}/complete`,
     workerAgentKey,
     {
-      result_md: resultMd,
-      evidence: { files_changed: ['verification.md'], verified: true },
       status: 'ready_for_review',
+      ...body,
     },
   );
 }
@@ -165,7 +168,7 @@ async function completeTask(
 async function register(baseUrl: string, prefix: string) {
   const response = await api(baseUrl, 'POST', '/v1/auth/register', undefined, {
     email: `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}@x.invalid`,
-    password: 'VerifyGate123!',
+    password: 'TaskEvidence123!',
     display_name: prefix,
   });
   assert.equal(response.status, 201);

@@ -118,7 +118,7 @@ async function main(): Promise<void> {
 
     // ── 6. worker completes the task, then project-pm can REVIEW it ──────
     const completeByWorker = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/orchestrations/${orchId}/tasks/${taskId}/complete`, workerKey, {
-      result_md: '# Done\nwork complete', evidence: { ok: true }, status: 'ready_for_review',
+    result_md: '# Done\nwork complete', evidence: { files_changed: ['rbac.md'], ok: true }, status: 'ready_for_review',
     });
     check('worker completes task', completeByWorker.status, 200);
 

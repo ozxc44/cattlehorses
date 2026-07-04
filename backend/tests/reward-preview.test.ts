@@ -91,7 +91,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nTask completed.',
-        evidence: { verified: true },
+        evidence: { files_changed: ['reward-preview.md'], verified: true },
         status: 'ready_for_review',
       },
     );

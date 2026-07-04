@@ -1,4 +1,4 @@
-import type { ProjectOrchestrationTask } from '../entities';
+import type { ProjectOrchestrationTask, ProjectOrchestrationTaskEvidence } from '../entities';
 
 export type TaskCompletionVerificationResult = {
   passed: boolean;
@@ -8,6 +8,7 @@ export type TaskCompletionVerificationResult = {
 export async function verifyTaskCompletion(
   task: ProjectOrchestrationTask,
   resultMd: string,
+  evidence?: ProjectOrchestrationTaskEvidence | null,
 ): Promise<TaskCompletionVerificationResult> {
   const failures: string[] = [];
   const trimmedResult = resultMd.trim();
@@ -34,6 +35,15 @@ export async function verifyTaskCompletion(
         failures.push(`Acceptance criterion not addressed: ${criterion}`);
       }
     }
+  }
+
+  if (
+    evidence &&
+    Array.isArray(evidence.files_changed) &&
+    evidence.files_changed.length === 0 &&
+    /\b(changed|modified)\b/i.test(trimmedResult)
+  ) {
+    failures.push('Evidence files_changed cannot be empty when result mentions changed or modified files');
   }
 
   return { passed: failures.length === 0, failures };

@@ -150,7 +150,7 @@ async function main(): Promise<void> {
       'POST',
       `/v1/projects/${projectId}/orchestrations/${orchestration.data.id}/tasks/${task.data.id}/complete`,
       intruderAgent.data.api_key,
-      { result_md: 'Trying to submit another agent task.', evidence: { invalid: true } },
+      { result_md: 'Trying to submit another agent task.', evidence: { files_changed: [], invalid: true } },
     );
     assert.equal(intruderComplete.status, 403);
 
@@ -174,7 +174,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nInitial implementation notes. Result file exists and Evidence file exists.',
-        evidence: { checks: ['smoke'], result: 'needs review' },
+        evidence: { files_changed: ['deliverables/worker/result.md'], checks: ['smoke'], result: 'needs review' },
       },
     );
     assert.equal(firstComplete.status, 200);
@@ -204,7 +204,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nFinal implementation notes with acceptance coverage. Result file exists and Evidence file exists.',
-        evidence: { checks: ['smoke', 'pm-loop'], result: 'pass' },
+        evidence: { files_changed: ['deliverables/worker/result.md'], checks: ['smoke', 'pm-loop'], result: 'pass' },
       },
     );
     assert.equal(secondComplete.status, 200);
@@ -248,7 +248,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nLate overwrite attempt after approval.',
-        evidence: { invalid: true },
+        evidence: { files_changed: [], invalid: true },
       },
     );
     assert.equal(lateOverwrite.status, 409);

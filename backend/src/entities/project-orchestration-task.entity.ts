@@ -25,6 +25,13 @@ export enum ProjectOrchestrationTaskStatus {
   CANCELLED = 'cancelled',
 }
 
+export type ProjectOrchestrationTaskEvidence = {
+  files_changed: string[];
+  test_passed: boolean | null;
+  diff_summary: string | null;
+  risk_notes: string | null;
+};
+
 @Entity('project_orchestration_tasks')
 @Index(['projectId', 'status'])
 @Index(['orchestrationId', 'status'])
@@ -70,6 +77,9 @@ export class ProjectOrchestrationTask {
 
   @Column({ name: 'evidence_path', type: 'varchar', length: 1024, nullable: true })
   evidencePath?: string | null;
+
+  @Column({ name: 'evidence_json', type: 'simple-json', nullable: true })
+  evidenceJson?: ProjectOrchestrationTaskEvidence | null;
 
   @Column({ name: 'metadata', type: 'simple-json', nullable: true })
   metadata?: Record<string, unknown> | null;

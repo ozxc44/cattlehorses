@@ -137,7 +137,7 @@ async function completeFailed(
     apiKey,
     {
       result_md: `# Failed attempt ${attempt}\n\nThe worker reports a reproducible failure for retry coverage.`,
-      evidence: { attempt, ok: false },
+      evidence: { files_changed: [], attempt, ok: false },
       status: 'failed',
     },
   );

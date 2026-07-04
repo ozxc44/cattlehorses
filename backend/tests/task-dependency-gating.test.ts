@@ -109,7 +109,7 @@ async function main(): Promise<void> {
       workerAgent.data.api_key,
       {
         result_md: '# Result\n\nTask A is complete.',
-        evidence: { dependency: 'satisfied' },
+        evidence: { files_changed: ['task-a.md'], dependency: 'satisfied' },
       },
     );
     assert.equal(completeA.status, 200);
