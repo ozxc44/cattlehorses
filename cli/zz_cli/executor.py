@@ -200,6 +200,19 @@ class ExecutorDaemon:
         self.self_path = os.path.abspath(self_path or __file__)
         self.no_self_update = no_self_update
         self.last_sha_check = 0
+        # R10a: worker smoke test. Periodically verify the configured handler can
+        # actually execute a real (minimal) task end-to-end, and report the result
+        # in the heartbeat so the platform can block dispatch for broken handlers
+        # (backend R10b consumes the `health` field). The smoke test only applies
+        # to --handler mode; without a handler it is skipped (dispatch stays open).
+        self.smoke_interval = 10
+        try:
+            self.smoke_interval = int(os.environ.get('ZZ_SMOKE_TEST_INTERVAL', '10') or '10')
+        except (TypeError, ValueError):
+            self.smoke_interval = 10
+        self._cycle_count = 0
+        self.last_smoke_result = None   # {healthy, last_error, duration_ms} or None
+        self.last_smoke_at = None       # epoch seconds of the last smoke test
 
     # ═══════════════════════════════════════════════════
     # SELF-UPDATE: keep the running executor in sync with the platform.
@@ -342,7 +355,19 @@ class ExecutorDaemon:
             return {'_error': str(e)}
 
     def heartbeat(self):
-        r = self.api('POST', '/v1/agents/heartbeat', {})
+        # R10a: report the last worker smoke-test health so the platform can
+        # block dispatch for handlers that cannot execute (backend R10b applies
+        # the `health` field). Only sent when a smoke test has actually run
+        # (handler mode); legacy/endpoint/manual workers omit it, leaving the
+        # platform health columns untouched and dispatch open.
+        body = {}
+        if self.last_smoke_result is not None:
+            body['health'] = {
+                'status': 'healthy' if self.last_smoke_result.get('healthy') else 'unhealthy',
+                'error': self.last_smoke_result.get('last_error') or '',
+                'checked_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            }
+        r = self.api('POST', '/v1/agents/heartbeat', body)
         if not self.my_agent_id:
             self.my_agent_id = r.get('agent_id')
         pending = r.get('pending_inbox_count', 0)
@@ -906,6 +931,153 @@ class ExecutorDaemon:
         except Exception as e:
             return {'result_md': f"# Error\n{e}", 'evidence': {'error': str(e), 'mode': 'handler'}}
 
+    # ═══════════════════════════════════════════════════
+    # SMOKE TEST: verify the configured handler can run a real (tiny) task.
+    # ═══════════════════════════════════════════════════
+
+    def run_smoke_test(self, working_copy='/tmp/zz-workspace'):
+        """Run a minimal end-to-end task through the configured handler.
+
+        Verifies the SAME handler used for real tasks (``self.handler_cmd`` via
+        ``_external_handler``) can actually execute. Steps:
+          1. build a temp file path under the working copy,
+          2. invoke the handler with a tiny task whose goal is "create file
+             <path> with content ok then respond done",
+          3. check the temp file was created with the expected content,
+          4. clean up the temp file,
+          5. return ``{healthy, last_error, duration_ms}``.
+
+        Everything is wrapped in try/except so any failure (handler not found,
+        timeout, file not created, permission denied, …) yields a clear
+        ``last_error`` string instead of raising.
+        """
+        start = time.time()
+        result = {'healthy': False, 'last_error': None, 'duration_ms': 0}
+
+        def _finish(healthy, last_error):
+            result['healthy'] = bool(healthy)
+            result['last_error'] = last_error
+            result['duration_ms'] = int((time.time() - start) * 1000)
+            return result
+
+        # Only the handler path is smoke-tested. endpoint/manual/headless modes
+        # are not covered (and must not be marked unhealthy, which would block
+        # dispatch per backend R10b).
+        if not self.handler_cmd:
+            return _finish(False, 'no handler configured (smoke test requires --handler)')
+
+        # 1. Build the temp file path under the working copy.
+        try:
+            stamp = int(time.time() * 1000)
+            smoke_path = os.path.join(working_copy, f'.zz-smoke-{stamp}.txt')
+        except Exception as e:
+            return _finish(False, f'could not build smoke file path: {e}')
+
+        # Pre-clean a stale file at that path (extremely unlikely, but be safe).
+        try:
+            if os.path.exists(smoke_path):
+                os.remove(smoke_path)
+        except Exception:
+            pass
+
+        expected_content = 'ok'
+
+        # 2. Invoke the SAME handler real tasks use. _external_handler normally
+        #    swallows subprocess errors and returns an evidence dict with an
+        #    `error` key; we still wrap the call defensively in case a future
+        #    change (or a test mock) lets it raise.
+        task_ctx = {
+            'task_id': 'smoke-test',
+            'title': 'smoke',
+            'goal': f'create file {smoke_path} with content {expected_content} then respond done',
+            'acceptance_criteria': [],
+            'project_id': self.project_id or '',
+            'orchestration_id': '',
+            'code_map': '',
+            'smoke_test': True,
+        }
+        task_json = json.dumps(task_ctx)
+        try:
+            out = self._external_handler(task_ctx, task_json)
+        except subprocess.TimeoutExpired:
+            return _finish(False, 'handler timed out (smoke test exceeded timeout)')
+        except FileNotFoundError as e:
+            return _finish(False, f'handler not found: {e}')
+        except PermissionError as e:
+            return _finish(False, f'permission denied invoking handler: {e}')
+        except Exception as e:
+            return _finish(False, f'handler raised: {e}')
+
+        # _external_handler returns {result_md, evidence}; an evidence `error`
+        # means the handler itself failed (empty output, timeout, missing binary,
+        # permission, …). Map each to a clear last_error.
+        ev = (out or {}).get('evidence') or {}
+        err = ev.get('error')
+        if err:
+            msg = self._classify_handler_error(err)
+            return _finish(False, msg)
+
+        # 3. Verify the temp file was created with the expected content.
+        try:
+            if not os.path.exists(smoke_path):
+                return _finish(False, f'handler did not create smoke file {smoke_path}')
+            with open(smoke_path, 'r') as f:
+                actual = f.read().strip()
+            if actual != expected_content:
+                return _finish(
+                    False,
+                    f'smoke file content mismatch: expected {expected_content!r}, got {actual!r}',
+                )
+        except PermissionError as e:
+            return _finish(False, f'permission denied reading smoke file: {e}')
+        except Exception as e:
+            return _finish(False, f'could not verify smoke file: {e}')
+        finally:
+            # 4. Always clean up the temp file, success or failure.
+            try:
+                if os.path.exists(smoke_path):
+                    os.remove(smoke_path)
+            except Exception:
+                pass
+
+        return _finish(True, None)
+
+    @staticmethod
+    def _classify_handler_error(err):
+        """Turn an _external_handler evidence `error` value into a clear message."""
+        if err == 'timeout':
+            return 'handler timed out (smoke test exceeded timeout)'
+        if err == 'empty':
+            return 'handler produced no output (command not found or crashed)'
+        s = str(err).lower()
+        if 'no such file' in s or 'not found' in s or 'errno 2' in s:
+            return f'handler not found: {err}'
+        if 'permission denied' in s or 'errno 13' in s:
+            return f'permission denied invoking handler: {err}'
+        return f'handler error: {err}'
+
+    def _maybe_run_periodic_smoke(self, force=False):
+        """Run a smoke test if the handler is configured and the interval elapsed.
+
+        Stores the result on ``self.last_smoke_result`` so the next heartbeat
+        reports it to the platform. No-op (and no health report) when no handler
+        is configured, so endpoint/manual/headless agents keep dispatch open.
+        """
+        if not self.handler_cmd:
+            return
+        try:
+            res = self.run_smoke_test()
+        except Exception as e:
+            # run_smoke_test is meant to catch everything; stay defensive anyway.
+            res = {'healthy': False, 'last_error': f'smoke test crashed: {e}', 'duration_ms': 0}
+        self.last_smoke_result = res
+        self.last_smoke_at = time.time()
+        ts = time.strftime('%H:%M:%S')
+        if res.get('healthy'):
+            print(f"[{ts}] 🟢 smoke-test: handler healthy ({res.get('duration_ms')}ms)", flush=True)
+        else:
+            print(f"[{ts}] 🔴 smoke-test: UNHEALTHY — {res.get('last_error')}", flush=True)
+
     def _call_endpoint(self, task_ctx):
         """POST task to the agent's own endpoint — its brain executes."""
         try:
@@ -1254,6 +1426,12 @@ class ExecutorDaemon:
             print(f"   ⚠ --headless set but AGENT_LLM_API_KEY missing; headless path inactive", flush=True)
         print(f"   OS: {platform.system()} {platform.machine()}", flush=True)
         print(f"   Ctrl+C to stop.", flush=True)
+
+        # R10a: smoke-test the handler once on startup so a broken/misconfigured
+        # handler is caught immediately and reported unhealthy in the first
+        # heartbeat. No-op when no handler is configured.
+        self._maybe_run_periodic_smoke(force=True)
+
         while self.running:
             try:
                 self.run_cycle()
@@ -1263,6 +1441,11 @@ class ExecutorDaemon:
                 break
             except Exception as e:
                 print(f"[{time.strftime('%H:%M:%S')}] Error: {e}", flush=True)
+            self._cycle_count += 1
+            # R10a: re-run the smoke test every N heartbeats (default 10 cycles,
+            # ~5min at the default 30s interval). Configurable via the env var.
+            if self.smoke_interval > 0 and self._cycle_count % self.smoke_interval == 0:
+                self._maybe_run_periodic_smoke()
             time.sleep(self.interval)
 
 

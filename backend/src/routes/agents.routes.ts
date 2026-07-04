@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate, extractProjectId, authenticateAgentApiKey, authenticateJwtOrAgentApiKey } from '../middleware/auth';
 import { requirePermission, requireAgentOwnerOrPermission, Permission } from '../middleware/rbac';
 import { AppDataSource } from '../data-source';
-import { Agent, AgentStatus, AgentLifecycleStatus } from '../entities/agent.entity';
+import { Agent, AgentStatus, AgentLifecycleStatus, AgentSmokeHealth } from '../entities/agent.entity';
 import { ProjectMember, ProjectRole } from '../entities/project-member.entity';
 import { Session, SessionStatus } from '../entities/session.entity';
 import { SessionParticipant } from '../entities/session-participant.entity';
@@ -129,6 +129,34 @@ function v1StatusFromHealth(status: unknown): AgentStatus {
     default:
       return AgentStatus.ACTIVE;
   }
+}
+
+/**
+ * R10b: record the worker's last self-reported smoke-test health onto the agent
+ * record. Workers send an optional `health` object in their heartbeat / health
+ * report:
+ *   { status: 'healthy' | 'unhealthy', error?: string, checked_at?: ISO string }
+ * When the field is absent (legacy worker) the columns are left untouched so
+ * dispatch remains allowed. Returns true when the health columns changed.
+ */
+function applySmokeHealth(agent: Agent, body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false;
+  const health = (body as Record<string, unknown>).health;
+  if (!health || typeof health !== 'object') return false;
+  const status = (health as Record<string, unknown>).status;
+  if (status !== AgentSmokeHealth.HEALTHY && status !== AgentSmokeHealth.UNHEALTHY) return false;
+
+  const errorRaw = (health as Record<string, unknown>).error;
+  const checkedAtRaw = (health as Record<string, unknown>).checked_at;
+  const checkedAt =
+    typeof checkedAtRaw === 'string' && !Number.isNaN(Date.parse(checkedAtRaw))
+      ? new Date(checkedAtRaw)
+      : new Date();
+
+  agent.healthStatus = status;
+  agent.healthLastError = typeof errorRaw === 'string' && errorRaw.trim().length > 0 ? errorRaw.trim() : null;
+  agent.healthCheckedAt = checkedAt;
+  return true;
 }
 
 function metricsArray(metricsJson: Record<string, unknown> | undefined): unknown[] {
@@ -800,6 +828,8 @@ router.post(
 
       agent.status = v1StatusFromHealth(status);
       agent.lastHeartbeatAt = new Date(observedAt);
+      // R10b: record last worker smoke-test health (optional `health` field).
+      applySmokeHealth(agent, req.body);
       agent.metricsJson = {
         ...(agent.metricsJson || {}),
         status: typeof status === 'string' ? status : getAgentPresence(agent).healthStatus,
@@ -912,6 +942,13 @@ router.get(
         metrics: agent.metricsJson || {},
         open_incidents: openIncidents,
         uptime_seconds: uptimeSeconds,
+        // R10b: last worker-reported smoke-test health. `null` status means the
+        // worker is legacy and never reported a smoke test.
+        smoke_test: {
+          status: agent.healthStatus ?? null,
+          last_error: agent.healthLastError ?? null,
+          checked_at: agent.healthCheckedAt ?? null,
+        },
       });
     } catch (err) {
       console.error('Agent health error:', err);
@@ -954,6 +991,10 @@ router.post(
         agent.status = v1StatusFromHealth(status);
       }
       agent.lastHeartbeatAt = new Date();
+
+      // R10b: record last worker smoke-test health (optional `health` field).
+      // When absent the columns stay as-is, so legacy workers remain dispatchable.
+      applySmokeHealth(agent, req.body);
 
       // Merge metadata into metricsJson
       if (metadata && typeof metadata === 'object') {

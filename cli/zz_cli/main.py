@@ -2821,6 +2821,93 @@ def agent_sync_base(
         )
 
 
+def _run_smoke_test_command(handler: str, working_copy: str) -> int:
+    """Build an ExecutorDaemon and run a one-shot handler smoke test.
+
+    Returns the desired process exit code (0 healthy, 1 unhealthy). The smoke
+    test is a pure local check of the handler subprocess — it makes NO platform
+    API calls — so it runs even without a configured agent key.
+    """
+    base_url = _get_base_url() or "http://localhost"
+    agent_key = (
+        os.environ.get("ZZ_AGENT_KEY")
+        or _load_config().get("api_key")
+        or ""
+    )
+    if not agent_key:
+        # Smoke test touches no platform endpoint; allow a placeholder key.
+        agent_key = "smoke-test-no-key"
+
+    from zz_cli.executor import ExecutorDaemon
+    daemon = ExecutorDaemon(
+        base_url=base_url,
+        api_key=agent_key,
+        handler_cmd=handler,
+        no_self_update=True,
+    )
+    result = daemon.run_smoke_test(working_copy=working_copy)
+    healthy = bool(result.get("healthy"))
+    if healthy:
+        console.print(f"[green]✓ smoke-test: handler healthy[/green] ({result.get('duration_ms')}ms)")
+    else:
+        console.print(f"[red]✗ smoke-test: handler UNHEALTHY[/red]")
+    console.print(f"  healthy    : {healthy}")
+    console.print(f"  last_error : {result.get('last_error') or '—'}")
+    console.print(f"  duration_ms: {result.get('duration_ms')}")
+    console.print(f"  [dim]json: {json.dumps(result)}[/dim]")
+    return 0 if healthy else 1
+
+
+@agent_app.command("smoke-test")
+def agent_smoke_test(
+    handler: str = typer.Option(
+        "", "--handler", "-H",
+        help="Handler command to test (same --handler as `zz agent executor`). "
+             "Receives task JSON on stdin, prints result on stdout.",
+    ),
+    working_copy: str = typer.Option(
+        "/tmp/zz-workspace", "--working-copy", "-w",
+        help="Working copy the smoke-test temp file is created under.",
+    ),
+) -> None:
+    """Run a one-shot worker smoke test against the configured handler.
+
+    Verifies the handler can execute a minimal task end-to-end: it invokes the
+    handler with a tiny task whose goal is to create a temp file, then checks the
+    file was created with the expected content and cleans it up. Prints the
+    result and exits 0 on success, 1 on failure. Does not touch the platform
+    task loop or report to the platform.
+
+    Examples:
+        zz agent smoke-test --handler "python3 my_handler.py"
+        zz agent smoke-test --handler "claude execute" -w /tmp/zz-workspace
+    """
+    rc = _run_smoke_test_command(handler, working_copy)
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
+@agents_app.command("smoke-test")
+def agents_smoke_test(
+    handler: str = typer.Option(
+        "", "--handler", "-H",
+        help="Handler command to test (same --handler as `zz agent executor`).",
+    ),
+    working_copy: str = typer.Option(
+        "/tmp/zz-workspace", "--working-copy", "-w",
+        help="Working copy the smoke-test temp file is created under.",
+    ),
+) -> None:
+    """Run a one-shot worker smoke test against the configured handler.
+
+    Alias for ``zz agent smoke-test``. Verifies the handler can execute a
+    minimal task end-to-end and prints the result (exit 0 healthy, 1 unhealthy).
+    """
+    rc = _run_smoke_test_command(handler, working_copy)
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
 @agent_app.command("submit")
 def agent_submit(
     result: str = typer.Option(..., "--result", "-r", help="Result markdown content or @file path"),

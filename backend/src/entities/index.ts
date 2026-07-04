@@ -2,7 +2,7 @@ export { User } from './user.entity';
 export { Project, ProjectVisibility, ProjectStatus } from './project.entity';
 export { ProjectMember, ProjectRole } from './project-member.entity';
 export { ProjectAuditEvent, ProjectAuditAction } from './project-audit-event.entity';
-export { Agent, AgentRuntime, AgentStatus, AgentLifecycleStatus } from './agent.entity';
+export { Agent, AgentRuntime, AgentStatus, AgentLifecycleStatus, AgentSmokeHealth } from './agent.entity';
 export { ProjectFile } from './project-file.entity';
 export { ProjectFileRevision } from './project-file-revision.entity';
 export { ProjectMemory, ProjectMemoryVisibility } from './project-memory.entity';

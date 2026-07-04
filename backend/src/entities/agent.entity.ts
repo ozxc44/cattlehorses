@@ -30,6 +30,16 @@ export enum AgentLifecycleStatus {
   SUPERSEDED = 'superseded',
 }
 
+/**
+ * Last self-reported worker smoke-test health, stored from the heartbeat.
+ * `null` means the worker is legacy / has never reported a smoke test —
+ * dispatch is allowed in that case. `unhealthy` blocks dispatch (HTTP 409).
+ */
+export enum AgentSmokeHealth {
+  HEALTHY = 'healthy',
+  UNHEALTHY = 'unhealthy',
+}
+
 @Entity('agents')
 export class Agent {
   @PrimaryGeneratedColumn('uuid')
@@ -72,6 +82,17 @@ export class Agent {
 
   @Column({ name: 'last_heartbeat_at', nullable: true })
   lastHeartbeatAt?: Date;
+
+  // Last worker self-reported smoke-test health (from heartbeat).
+  // null = legacy worker that never reported a smoke test → dispatch allowed.
+  @Column({ name: 'health_status', type: 'varchar', length: 32, nullable: true })
+  healthStatus?: string | null;
+
+  @Column({ name: 'health_last_error', type: 'text', nullable: true })
+  healthLastError?: string | null;
+
+  @Column({ name: 'health_checked_at', nullable: true })
+  healthCheckedAt?: Date | null;
 
   @Column({ name: 'metrics_json', type: 'simple-json', nullable: true, default: '{}' })
   metricsJson?: Record<string, unknown>;

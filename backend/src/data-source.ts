@@ -90,6 +90,7 @@ function normalizeReflectedColumnTypes(): void {
   const datePatchTargets: { target: Function; propertyName: string }[] = [
     ...[ProjectJoinRequest, ProjectFileProposal, ProjectChangeset, ProjectGateAttempt].map((t) => ({ target: t, propertyName: 'reviewedAt' })),
     { target: Agent, propertyName: 'retiredAt' },
+    { target: Agent, propertyName: 'healthCheckedAt' },
     ...[AgentInboxItem].flatMap((t) => [
       { target: t, propertyName: 'readAt' },
       { target: t, propertyName: 'ackedAt' },

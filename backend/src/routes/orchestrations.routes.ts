@@ -7,6 +7,7 @@ import { requirePermission, Permission } from '../middleware/rbac';
 import {
   Agent,
   AgentLifecycleStatus,
+  AgentSmokeHealth,
   Project,
   ProjectBranch,
   ProjectFile,
@@ -1983,6 +1984,23 @@ async function ensureAgentsExistAndDispatchable(
       code: 'AGENT_NOT_ONLINE',
       offline_agent_ids: offlineAgentIds,
       heartbeat_ttl_seconds: Math.floor((presenceByAgent[0]?.presence.onlineTtlMs ?? 90_000) / 1000),
+    });
+    return false;
+  }
+
+  // R10b: a fresh heartbeat is not enough — the worker must also be healthy.
+  // Workers report a smoke-test result via heartbeat; we store it on the agent
+  // record. `unhealthy` blocks dispatch. No health field (null/legacy worker)
+  // is allowed through to preserve backward compatibility.
+  const unhealthyAgents = presenceByAgent
+    .filter((item) => item.agent.healthStatus === AgentSmokeHealth.UNHEALTHY)
+    .map((item) => ({ id: item.agent.id, last_error: item.agent.healthLastError ?? null }));
+  if (unhealthyAgents.length > 0) {
+    res.status(409).json({
+      detail: 'One or more agents failed their last health (smoke) check. Dispatch requires a healthy worker.',
+      code: 'AGENT_UNHEALTHY',
+      unhealthy_agent_ids: unhealthyAgents.map((item) => item.id),
+      unhealthy_agents: unhealthyAgents,
     });
     return false;
   }
