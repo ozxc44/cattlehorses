@@ -11,6 +11,7 @@ Usage:
     zz send --session <id> --message <text>
     zz stream --session <id>
     zz health --project <id>
+    zz doctor --project <id>
     zz dev fake-agent
     zz dev quickstart-runtime
 """
@@ -1895,6 +1896,354 @@ def _print_health(
             console.print(f"[bold]Version:[/bold] {h['version']}")
         if "uptime_seconds" in h:
             console.print(f"[bold]Uptime:[/bold] {h['uptime_seconds']}s")
+
+
+def _doctor_redact(value: Any) -> str:
+    import re
+
+    text = str(value)
+    text = re.sub(r"zzk_[A-Za-z0-9._~+/=-]+", "zzk_***", text)
+    text = re.sub(r"sk-[A-Za-z0-9._~+/=-]+", "sk-***", text)
+    text = re.sub(r"sk_[A-Za-z0-9._~+/=-]+", "sk_***", text)
+    return text
+
+
+def _doctor_http_json(
+    method: str,
+    base_url: str,
+    path: str,
+    *,
+    api_key: Optional[str] = None,
+    body: Optional[dict[str, Any]] = None,
+    params: Optional[dict[str, Any]] = None,
+    timeout: float = 8.0,
+) -> tuple[int, Any]:
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    url = base_url.rstrip("/") + path
+    if params:
+        filtered_params = {k: v for k, v in params.items() if v is not None}
+        if filtered_params:
+            url += "?" + urllib.parse.urlencode(filtered_params)
+    payload = json.dumps(body or {}).encode() if body is not None else None
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    if api_key:
+        if api_key.startswith("zzk_"):
+            headers["X-API-Key"] = api_key
+        else:
+            headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode()
+            return resp.status, json.loads(raw or "{}")
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
+        try:
+            parsed: Any = json.loads(raw or "{}")
+        except Exception:
+            parsed = {"detail": raw[:200]}
+        return e.code, parsed
+
+
+def _doctor_agent_key() -> Optional[str]:
+    config = _load_config()
+    identity = _load_identity()
+
+    api_key = os.environ.get("ZZ_AGENT_KEY")
+    if api_key:
+        return api_key
+
+    stored = config.get("api_key") or config.get("access_token")
+    if stored and str(stored).startswith("zzk_"):
+        return str(stored)
+
+    identity_key = identity.get("credentials", {}).get("agent_key")
+    if identity_key:
+        return str(identity_key)
+
+    return None
+
+
+def _doctor_project_id(project_id: Optional[str], discovered_projects: list[dict[str, Any]]) -> Optional[str]:
+    if project_id:
+        return project_id
+    config = _load_config()
+    identity = _load_identity()
+    configured = config.get("default_project") or identity.get("project", {}).get("id")
+    if configured:
+        return str(configured)
+    for item in discovered_projects:
+        project = item.get("project") if isinstance(item, dict) else None
+        if isinstance(project, dict) and project.get("id"):
+            return str(project["id"])
+    return None
+
+
+def _doctor_find_executor_processes() -> list[tuple[str, str]]:
+    if os.name == "nt":
+        return []
+    try:
+        proc = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return []
+
+    current_pid = str(os.getpid())
+    matches: list[tuple[str, str]] = []
+    for raw_line in proc.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        pid, _, command = line.partition(" ")
+        command = command.strip()
+        if pid == current_pid:
+            continue
+        command_l = command.lower()
+        is_executor = (
+            "zz agent executor" in command_l
+            or ("zz_cli.main" in command_l and " agent " in f" {command_l} " and " executor" in command_l)
+            or "zz_cli.executor" in command_l
+        )
+        if is_executor and " doctor" not in command_l:
+            matches.append((pid, command))
+    return matches
+
+
+def _doctor_check_platform(base_url: str) -> tuple[bool, str]:
+    paths = ["/v1/health", "/health"]
+    last_detail = ""
+    for path in paths:
+        try:
+            status, data = _doctor_http_json("GET", base_url, path)
+        except Exception as e:
+            last_detail = _doctor_redact(e)
+            continue
+        if 200 <= status < 300:
+            health_status = data.get("status", "ok") if isinstance(data, dict) else "ok"
+            return True, f"GET {path} HTTP {status}, status={health_status}"
+        last_detail = f"GET {path} HTTP {status}"
+        if status != 404:
+            break
+    return False, last_detail or "platform unreachable"
+
+
+def _doctor_discover_projects(base_url: str, agent_key: Optional[str]) -> tuple[bool, str, list[dict[str, Any]]]:
+    if not agent_key:
+        return False, "no agent credential found", []
+    try:
+        status, data = _doctor_http_json("GET", base_url, "/v1/agent/projects", api_key=agent_key)
+    except Exception as e:
+        return False, _doctor_redact(e), []
+    if not (200 <= status < 300):
+        detail = data.get("detail", data) if isinstance(data, dict) else data
+        return False, f"HTTP {status}: {_doctor_redact(detail)}", []
+
+    raw_items: Any = data
+    if isinstance(data, dict):
+        raw_items = data.get("data", data.get("items", []))
+        if isinstance(raw_items, dict):
+            raw_items = raw_items.get("data", [])
+    items = [item for item in raw_items if isinstance(item, dict)] if isinstance(raw_items, list) else []
+    return True, f"{len(items)} project(s) discovered", items
+
+
+def _doctor_check_heartbeat(
+    base_url: str,
+    agent_key: Optional[str],
+) -> tuple[bool, str, Optional[str]]:
+    if not agent_key:
+        return False, "no agent credential found", None
+    try:
+        status, data = _doctor_http_json("POST", base_url, "/v1/agents/heartbeat", api_key=agent_key, body={})
+    except Exception as e:
+        return False, _doctor_redact(e), None
+    if not (200 <= status < 300):
+        detail = data.get("detail", data) if isinstance(data, dict) else data
+        return False, f"HTTP {status}: {_doctor_redact(detail)}", None
+
+    agent_id = data.get("agent_id") if isinstance(data, dict) else None
+    presence = data.get("presence") if isinstance(data, dict) else None
+    online = data.get("is_online") if isinstance(data, dict) else None
+    dispatchable = data.get("dispatchable") if isinstance(data, dict) else None
+    ok = bool(data.get("ok", True)) if isinstance(data, dict) else True
+    ok = ok and online is not False and presence != "offline"
+    detail = (
+        f"agent={agent_id or 'unknown'}, presence={presence or 'unknown'}, "
+        f"online={online if online is not None else 'unknown'}, "
+        f"dispatchable={dispatchable if dispatchable is not None else 'unknown'}"
+    )
+    return ok, detail, str(agent_id) if agent_id else None
+
+
+def _doctor_check_capabilities(
+    discovered_projects: list[dict[str, Any]],
+    project_id: Optional[str],
+    agent_id: Optional[str],
+) -> tuple[bool, str]:
+    for item in discovered_projects:
+        project = item.get("project") if isinstance(item, dict) else {}
+        agent = item.get("agent") if isinstance(item, dict) else {}
+        if not isinstance(project, dict) or not isinstance(agent, dict):
+            continue
+        if project_id and project.get("id") != project_id:
+            continue
+        if agent_id and agent.get("id") != agent_id:
+            continue
+        capabilities = agent.get("capabilities") or agent.get("scopes") or []
+        if isinstance(capabilities, list) and capabilities:
+            rendered = ", ".join(str(cap) for cap in capabilities[:8])
+            suffix = "" if len(capabilities) <= 8 else f" (+{len(capabilities) - 8} more)"
+            return True, rendered + suffix
+        return False, "agent has no capabilities configured"
+    if not discovered_projects:
+        return False, "agent project discovery unavailable"
+    return False, "current agent not found in discovered projects"
+
+
+def _doctor_check_executor() -> tuple[bool, str]:
+    matches = _doctor_find_executor_processes()
+    if not matches:
+        return False, "no zz agent executor process found"
+    pids = ", ".join(pid for pid, _command in matches[:5])
+    suffix = "" if len(matches) <= 5 else f" (+{len(matches) - 5} more)"
+    return True, f"running pid(s): {pids}{suffix}"
+
+
+def _doctor_check_recent_success_rate(
+    base_url: str,
+    agent_key: Optional[str],
+    project_id: Optional[str],
+    agent_id: Optional[str],
+    limit: int,
+) -> tuple[bool, str]:
+    if not agent_key:
+        return False, "no agent credential found"
+    terminal_statuses = {"approved", "failed", "blocked", "cancelled", "changes_requested"}
+    success_statuses = {"approved"}
+
+    if project_id:
+        params = {
+            "limit": max(1, min(limit, 100)),
+            "offset": 0,
+            "sort": "updated",
+            "assigned_agent_id": agent_id,
+        }
+        try:
+            status, data = _doctor_http_json(
+                "GET",
+                base_url,
+                f"/v1/projects/{project_id}/orchestration-tasks",
+                api_key=agent_key,
+                params=params,
+            )
+        except Exception as e:
+            return False, _doctor_redact(e)
+        if 200 <= status < 300:
+            raw_items = data.get("data", []) if isinstance(data, dict) else []
+            tasks = [item for item in raw_items if isinstance(item, dict)]
+            terminal = [task for task in tasks if task.get("status") in terminal_statuses]
+            if terminal:
+                successes = sum(1 for task in terminal if task.get("status") in success_statuses)
+                rate = successes / len(terminal)
+                ok = rate >= 0.8
+                return ok, f"{successes}/{len(terminal)} approved ({rate:.0%})"
+            if tasks:
+                return True, f"{len(tasks)} recent task(s), none terminal yet"
+            return True, "no recent tasks found"
+        detail = data.get("detail", data) if isinstance(data, dict) else data
+        return False, f"HTTP {status}: {_doctor_redact(detail)}"
+
+    try:
+        status, data = _doctor_http_json("GET", base_url, "/v1/agent/workload", api_key=agent_key)
+    except Exception as e:
+        return False, _doctor_redact(e)
+    if not (200 <= status < 300):
+        detail = data.get("detail", data) if isinstance(data, dict) else data
+        return False, f"HTTP {status}: {_doctor_redact(detail)}"
+    recent = data.get("recent", []) if isinstance(data, dict) else []
+    units = [item for item in recent if isinstance(item, dict)]
+    terminal = [unit for unit in units if unit.get("status") in {"completed", "failed"}]
+    if not terminal:
+        return True, "no recent terminal workload units found"
+    successes = sum(1 for unit in terminal if unit.get("status") == "completed")
+    rate = successes / len(terminal)
+    return rate >= 0.8, f"{successes}/{len(terminal)} completed ({rate:.0%})"
+
+
+@app.command("doctor")
+def doctor(
+    project_id: Optional[str] = typer.Option(None, "--project", "-p", help="Project ID for project-scoped checks"),
+    agent_id: Optional[str] = typer.Option(None, "--agent", "-a", help="Agent ID override for reporting/filtering"),
+    recent_limit: int = typer.Option(20, "--recent-limit", min=1, max=100, help="Recent tasks to inspect"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Platform base URL"),
+) -> None:
+    """Run local agent diagnostics and print a health report."""
+    resolved_base_url = (base_url or _get_base_url()).rstrip("/")
+    agent_key = _doctor_agent_key()
+
+    platform_ok, platform_detail = _doctor_check_platform(resolved_base_url)
+    projects_ok, projects_detail, discovered_projects = _doctor_discover_projects(resolved_base_url, agent_key)
+    heartbeat_ok, heartbeat_detail, heartbeat_agent_id = _doctor_check_heartbeat(resolved_base_url, agent_key)
+    resolved_agent_id = agent_id or heartbeat_agent_id
+    resolved_project_id = _doctor_project_id(project_id, discovered_projects)
+    executor_ok, executor_detail = _doctor_check_executor()
+    capabilities_ok, capabilities_detail = _doctor_check_capabilities(
+        discovered_projects,
+        resolved_project_id,
+        resolved_agent_id,
+    )
+    success_ok, success_detail = _doctor_check_recent_success_rate(
+        resolved_base_url,
+        agent_key,
+        resolved_project_id,
+        resolved_agent_id,
+        recent_limit,
+    )
+
+    checks = [
+        ("Platform connectivity", platform_ok, platform_detail),
+        ("Agent online status", heartbeat_ok, heartbeat_detail),
+        ("Executor running", executor_ok, executor_detail),
+        ("Capabilities set", capabilities_ok, capabilities_detail),
+        ("Recent task success rate", success_ok, success_detail),
+    ]
+    overall_ok = all(ok for _name, ok, _detail in checks)
+
+    console.print("[bold]zz doctor[/bold]")
+    console.print(f"  Base URL: {resolved_base_url}")
+    if resolved_project_id:
+        console.print(f"  Project:  {resolved_project_id}")
+    if resolved_agent_id:
+        console.print(f"  Agent:    {resolved_agent_id}")
+    if not projects_ok and projects_detail != "no agent credential found":
+        console.print(f"  [dim]Project discovery: {_doctor_redact(projects_detail)}[/dim]")
+    console.print()
+
+    table = Table(title="Health Report", title_style="bold")
+    table.add_column("Check", no_wrap=True)
+    table.add_column("Result", width=8)
+    table.add_column("Detail", overflow="fold")
+    for name, ok, detail in checks:
+        table.add_row(
+            name,
+            "[green]✓[/green]" if ok else "[red]✗[/red]",
+            _doctor_redact(detail),
+        )
+    console.print(table)
+    console.print()
+    console.print(
+        "[green]Overall: healthy[/green]" if overall_ok else "[yellow]Overall: degraded[/yellow]"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

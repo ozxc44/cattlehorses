@@ -34,6 +34,7 @@ def test_top_level_help() -> None:
     assert "orchestrations" in result.stdout
     assert "tasks" in result.stdout
     assert "changesets" in result.stdout
+    assert "doctor" in result.stdout
 
 
 def test_orchestrations_help() -> None:
