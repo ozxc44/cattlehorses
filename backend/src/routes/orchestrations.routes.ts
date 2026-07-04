@@ -946,6 +946,21 @@ router.post(
           task.orchestration.status = ProjectOrchestrationStatus.BLOCKED;
         } else if (nextStatus === ProjectOrchestrationTaskStatus.FAILED) {
           task.orchestration.status = ProjectOrchestrationStatus.FAILED;
+          // Auto-Triage: create a fix task when retries exhausted (gk Pro R6)
+          if ((task.retryCount ?? 0) >= (task.maxRetries ?? 2)) {
+            const fixTask = manager.create(ProjectOrchestrationTask, {
+              projectId: task.projectId,
+              orchestrationId: task.orchestrationId,
+              title: `Fix: ${(task.title || '').slice(0, 180)}`,
+              goal: `Previous task failed after ${task.retryCount ?? 0} retries. Original goal: ${(task.goal || '').slice(0, 300)} Review the failure and provide a corrected implementation.`,
+              status: ProjectOrchestrationTaskStatus.DISPATCHED,
+              assignedAgentId: task.assignedAgentId,
+              dispatchedAt: new Date(),
+              metadata: { auto_triaged: true, source_task: task.id },
+            });
+            await manager.save(ProjectOrchestrationTask, fixTask);
+            console.log(`[auto-triage] created fix task for failed task ${task.id}`);
+          }
         } else if (
           task.orchestration.status === ProjectOrchestrationStatus.PLANNING ||
           task.orchestration.status === ProjectOrchestrationStatus.BLOCKED ||
