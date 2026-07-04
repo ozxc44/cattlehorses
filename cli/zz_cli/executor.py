@@ -829,32 +829,14 @@ class ExecutorDaemon:
 
         cs_id = self.find_changeset_for_task(pid, tid)
         if cs_id:
-            print(f"  → reviewing changeset {cs_id[:12]}", flush=True)
-
-            # Quality gate: verify code compiles before merge
-            build_ok = self.verify_build()
-            if not build_ok:
-                print(f"  ❌ build failed — changeset rejected (not merged)", flush=True)
-                self.review_changeset(pid, cs_id, 'changes_requested',
-                    'Build failed — PM executor quality gate blocked merge. Fix compilation errors.')
-                if oid:
-                    self.review_task(pid, oid, tid, 'changes_requested',
-                        'Build failed — fix compilation errors and resubmit.')
-                    print(f"  ✓ task sent back to worker (changes_requested)", flush=True)
-                return True
-
-            self.review_changeset(pid, cs_id, 'approved', 'Auto-approved by PM executor (build passed)')
-            print(f"  ✓ changeset approved", flush=True)
-            merge = self.merge_changeset(pid, cs_id)
-            if merge.get('commit'):
-                print(f"  ✓ merged (sha: {merge['commit'].get('git_sha','')[:12]})", flush=True)
-            elif merge.get('_error'):
-                print(f"  ⚠ merge: {merge.get('detail','')}", flush=True)
+            print(f"  📌 changeset {cs_id[:12]} ready for PM review — NOT auto-merging", flush=True)
+            print(f"     PM (human/agent) must verify build + test before merge.", flush=True)
+            # Do NOT auto-approve or auto-merge. Just surface it.
+            # The PM (I/ZCode) will be notified via inbox and handle review manually.
 
         if oid:
-            task_rev = self.review_task(pid, oid, tid, 'approved', 'Auto-approved by PM executor')
-            if not task_rev.get('_error'):
-                print(f"  ✓ task approved", flush=True)
+            # Mark task as ready_for_review (already is), don't auto-approve
+            print(f"  📌 task {tid[:8]} waiting for PM review", flush=True)
         return True
 
     def _pm_review_recovery(self, pid):
@@ -880,31 +862,14 @@ class ExecutorDaemon:
         if not submitted:
             return
         ts = time.strftime('%H:%M:%S')
-        print(f"\n[{ts}] 📋 PM Recovery: {len(submitted)} submitted changeset(s) waiting", flush=True)
+        print(f"\n[{ts}] 📋 PM Recovery: {len(submitted)} submitted changeset(s) waiting for PM review", flush=True)
         for c in submitted:
             cs_id = c.get('id')
             title = (c.get('title') or '')[:50]
-            tid = c.get('task_id')
-            print(f"  → changeset {cs_id[:12]}: {title}", flush=True)
-            # Approve the changeset
-            self.review_changeset(pid, cs_id, 'approved', 'Auto-approved by PM executor (recovery)')
-            merge = self.merge_changeset(pid, cs_id)
-            if merge.get('commit'):
-                print(f"  ✓ merged (sha: {merge['commit'].get('git_sha','')[:12]})", flush=True)
-            elif merge.get('_error'):
-                detail = merge.get('detail', '')
-                # 'already merged' / 409 conflict are not fatal — skip silently.
-                if 'merge' in detail.lower() or 'conflict' in detail.lower() or merge.get('_error') in (409, 422):
-                    print(f"  ⚠ skip: {detail[:60]}", flush=True)
-                else:
-                    print(f"  ⚠ merge failed: {detail[:60]}", flush=True)
-            # Also approve the underlying task if it's ready_for_review
-            oid = c.get('orchestration_id')
-            if tid and oid:
-                task = self.get_task(pid, oid, tid)
-                if task.get('status') == 'ready_for_review':
-                    self.review_task(pid, oid, tid, 'approved', 'Auto-approved by PM executor (recovery)')
-                    print(f"  ✓ task approved", flush=True)
+            code_files = [op.get('path','') for op in c.get('file_ops',[]) if not op.get('path','').startswith('.agent')]
+            print(f"  📌 {cs_id[:12]}: {title} ({len(code_files)} code files) — waiting for PM review", flush=True)
+            # Do NOT auto-approve, auto-merge, or auto-approve tasks.
+            # PM (human/agent) must verify build + test before any merge.
 
     # ═══════════════════════════════════════════════════
     # MAIN CYCLE
