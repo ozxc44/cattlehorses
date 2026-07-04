@@ -386,7 +386,8 @@ class ExecutorDaemon:
         # cannot be invoked (no endpoint_url) — which is why dispatched tasks
         # never wake it. Done in run_cycle after project_id is known so the
         # printed commands can carry the real project ID.
-        return pending
+        return r
+
 
     def _surface_onboarding(self, onboarding):
         """Print actionable upgrade guidance from the platform.
@@ -1319,7 +1320,8 @@ class ExecutorDaemon:
         if self.maybe_self_update():
             return
 
-        pending = self.heartbeat()
+        _hb = self.heartbeat()
+        pending = _hb.get('pending_inbox_count', 0) if isinstance(_hb, dict) else 0
 
         pid = self.get_project_id()
         if not pid:
