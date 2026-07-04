@@ -41,6 +41,7 @@ import {
   redactValue,
 } from '../services/md-artifact.service';
 import { createInboxItem, upsertWorkUnit, updateWorkUnitOnReview, ackInboxItemsForTask } from './agent-inbox.routes';
+import { eventStreamService } from '../services/event-stream.service';
 
 const router = Router();
 const dispatchService = new SessionDispatchService();
@@ -346,6 +347,8 @@ router.post(
         return created;
       });
 
+      publishTaskStatusChanged(orchestration.sessionId, projectId, task, null);
+
       if (task.status === ProjectOrchestrationTaskStatus.DISPATCHED) {
         await dispatchTaskToAssignedAgent({
           projectId,
@@ -354,6 +357,24 @@ router.post(
           actorId: actor.actorId,
           retry: false,
         });
+
+        try {
+          if (orchestration.sessionId) {
+            eventStreamService.publish(orchestration.sessionId, {
+              projectId,
+              sessionId: orchestration.sessionId,
+              agentId: task.assignedAgentId ?? undefined,
+              type: 'task_dispatched',
+              payload: {
+                taskId: task.id,
+                agentId: task.assignedAgentId ?? undefined,
+                status: task.status,
+              },
+            });
+          }
+        } catch (streamErr) {
+          console.warn('Failed to publish task_dispatched event:', streamErr);
+        }
       }
 
       res.status(201).json(serializeTask(task));
@@ -662,6 +683,7 @@ router.patch(
         updateFields.assignedAgentId = req.agent.id;
       }
 
+      const previousStatus = task.status;
       const repo = AppDataSource.getRepository(ProjectOrchestrationTask);
       const claimResult = await repo
         .createQueryBuilder()
@@ -708,6 +730,31 @@ router.patch(
       claimedTask.claimedAt = claimedTask.claimedAt ?? new Date();
       await repo.save(claimedTask);
       await AppDataSource.transaction((manager) => refreshTaskLedger(manager, claimedTask.orchestration, actor.actorId));
+
+      publishTaskStatusChanged(
+        claimedTask.orchestration.sessionId,
+        claimedTask.orchestration.projectId,
+        claimedTask,
+        previousStatus,
+      );
+
+      try {
+        if (claimedTask.orchestration.sessionId) {
+          eventStreamService.publish(claimedTask.orchestration.sessionId, {
+            projectId: claimedTask.orchestration.projectId,
+            sessionId: claimedTask.orchestration.sessionId,
+            agentId: req.agent?.id ?? claimedTask.assignedAgentId ?? undefined,
+            type: 'task_claimed',
+            payload: {
+              taskId: claimedTask.id,
+              agentId: req.agent?.id ?? claimedTask.assignedAgentId ?? undefined,
+            },
+          });
+        }
+      } catch (streamErr) {
+        console.warn('Failed to publish task_claimed event:', streamErr);
+      }
+
       res.json(serializeTask(claimedTask));
     } catch (err) {
       console.error('Claim orchestration task error:', err);
@@ -935,6 +982,13 @@ router.post(
       });
 
       const updated = completion.task;
+      publishTaskStatusChanged(
+        updated.orchestration.sessionId,
+        projectId,
+        updated,
+        ProjectOrchestrationTaskStatus.RUNNING,
+      );
+
       if (completion.retried) {
         await dispatchTaskToAssignedAgent({
           projectId,
@@ -943,6 +997,25 @@ router.post(
           actorId: actor.actorId,
           retry: true,
         });
+
+        try {
+          if (updated.orchestration.sessionId) {
+            eventStreamService.publish(updated.orchestration.sessionId, {
+              projectId,
+              sessionId: updated.orchestration.sessionId,
+              agentId: req.agent?.id ?? updated.assignedAgentId ?? undefined,
+              type: 'task_completed',
+              payload: {
+                taskId: updated.id,
+                agentId: req.agent?.id ?? updated.assignedAgentId ?? undefined,
+                status: updated.status,
+              },
+            });
+          }
+        } catch (streamErr) {
+          console.warn('Failed to publish task_completed event:', streamErr);
+        }
+
         res.json(serializeTask(updated));
         return;
       }
@@ -1044,6 +1117,24 @@ router.post(
           provisionalWorkUnits: 1.0,
           idempotencyKey: `wu:${updated.orchestrationId}:${updated.id}:${updated.assignedAgentId}`,
         });
+      }
+
+      try {
+        if (updated.orchestration.sessionId) {
+          eventStreamService.publish(updated.orchestration.sessionId, {
+            projectId,
+            sessionId: updated.orchestration.sessionId,
+            agentId: req.agent?.id ?? updated.assignedAgentId ?? undefined,
+            type: 'task_completed',
+            payload: {
+              taskId: updated.id,
+              agentId: req.agent?.id ?? updated.assignedAgentId ?? undefined,
+              status: updated.status,
+            },
+          });
+        }
+      } catch (streamErr) {
+        console.warn('Failed to publish task_completed event:', streamErr);
       }
 
       res.json(serializeTask(updated));
@@ -1193,10 +1284,36 @@ router.patch(
         }
       }
 
+      publishTaskStatusChanged(
+        updated.orchestration.sessionId,
+        updated.projectId,
+        updated,
+        ProjectOrchestrationTaskStatus.READY_FOR_REVIEW,
+      );
+
       // Workload ledger: update work unit with review decision
       if (updated.assignedAgentId) {
         await updateWorkUnitOnReview(updated.id, updated.assignedAgentId, decision);
       }
+
+      try {
+        if (updated.orchestration.sessionId) {
+          eventStreamService.publish(updated.orchestration.sessionId, {
+            projectId: updated.projectId,
+            sessionId: updated.orchestration.sessionId,
+            agentId: req.agent?.id ?? undefined,
+            type: 'task_reviewed',
+            payload: {
+              taskId: updated.id,
+              agentId: req.agent?.id ?? undefined,
+              decision,
+            },
+          });
+        }
+      } catch (streamErr) {
+        console.warn('Failed to publish task_reviewed event:', streamErr);
+      }
+
       res.json(serializeTask(updated));
     } catch (err) {
       console.error('Review orchestration task error:', err);
@@ -1326,6 +1443,7 @@ router.post(
         return;
       }
       const newTaskId = randomUUID();
+      const previousStatus = task.status;
 
       const result = await AppDataSource.transaction(async (manager) => {
         // 1. Cancel the old task.
@@ -1426,6 +1544,40 @@ router.post(
           orchestrationId,
           taskId: newTaskId,
         });
+      }
+
+      publishTaskStatusChanged(orchestration.sessionId, projectId, task, previousStatus);
+      publishTaskStatusChanged(orchestration.sessionId, projectId, result, null);
+
+      try {
+        if (orchestration.sessionId) {
+          eventStreamService.publish(orchestration.sessionId, {
+            projectId,
+            sessionId: orchestration.sessionId,
+            agentId: task.assignedAgentId ?? undefined,
+            type: 'task_cancelled',
+            payload: {
+              taskId: task.id,
+              agentId: task.assignedAgentId ?? undefined,
+              status: task.status,
+              reassigned_to: newAgentId,
+            },
+          });
+          eventStreamService.publish(orchestration.sessionId, {
+            projectId,
+            sessionId: orchestration.sessionId,
+            agentId: newAgentId,
+            type: 'task_dispatched',
+            payload: {
+              taskId: result.id,
+              agentId: newAgentId,
+              status: result.status,
+              reassigned_from: task.id,
+            },
+          });
+        }
+      } catch (streamErr) {
+        console.warn('Failed to publish reassignment events:', streamErr);
       }
 
       res.status(201).json(serializeTask(result));
@@ -1708,6 +1860,31 @@ async function appendCompletionReview(
     actorId,
     message: 'Complete orchestration',
   });
+}
+
+function publishTaskStatusChanged(
+  sessionId: string | null | undefined,
+  projectId: string,
+  task: ProjectOrchestrationTask,
+  previousStatus: ProjectOrchestrationTaskStatus | null,
+): void {
+  if (!sessionId) return;
+  try {
+    eventStreamService.publish(sessionId, {
+      projectId,
+      sessionId,
+      agentId: task.assignedAgentId ?? undefined,
+      type: 'task_status_changed',
+      payload: {
+        taskId: task.id,
+        previousStatus,
+        status: task.status,
+        agentId: task.assignedAgentId ?? undefined,
+      },
+    });
+  } catch (streamErr) {
+    console.warn('Failed to publish task_status_changed event:', streamErr);
+  }
 }
 
 async function notifyAgentInSession(input: {
