@@ -50,3 +50,4 @@ export {
   WebhookDeliveryStatus,
 } from './project-webhook-delivery.entity';
 export { ProjectChangesetMergeStatus } from './project-changeset.entity';
+export { ProjectChangesetPostMergeStatus } from './project-changeset.entity';

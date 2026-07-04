@@ -168,6 +168,9 @@ export class ProjectChangeset {
   @Column({ name: 'merged_at', nullable: true })
 
   @Column({ name: 'merge_status', type: 'varchar', nullable: true })
+
+  @Column({ name: 'post_merge_status', type: 'varchar', nullable: true })
+  postMergeStatus?: ProjectChangesetPostMergeStatus | null;
   mergeStatus?: ProjectChangesetMergeStatus | null;
   mergedAt?: Date;
 
@@ -215,4 +218,10 @@ export enum ProjectChangesetMergeStatus {
   STALE = 'stale',
   CONFLICT = 'conflict',
   NEEDS_REBASE = 'needs_rebase',
+}
+
+export enum ProjectChangesetPostMergeStatus {
+  PENDING = 'pending',
+  PASSED = 'passed',
+  FAILED = 'failed',
 }

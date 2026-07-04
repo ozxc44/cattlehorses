@@ -1322,6 +1322,55 @@ router.patch(
   },
 );
 
+
+// ── Post-Merge Verification Gate ────────────────────────────────────────────
+// After a changeset is merged, POST this endpoint to run npm run build and
+// record whether the merged code actually compiles. (gk Pro R4 recommendation)
+router.post(
+  '/v1/projects/:project_id/changesets/:changeset_id/post-merge-verify',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const changeset = await AppDataSource.getRepository(ProjectChangeset).findOne({
+        where: { id: req.params.changeset_id, projectId: req.params.project_id },
+      });
+      if (!changeset) {
+        res.status(404).json({ detail: 'Changeset not found' });
+        return;
+      }
+      if (changeset.status !== 'merged') {
+        res.status(409).json({ detail: 'Changeset must be merged before post-merge verification' });
+        return;
+      }
+      let postMergeStatus: 'passed' | 'failed' = 'passed';
+      let buildOutput = '';
+      try {
+        const { execSync } = await import('child_process');
+        buildOutput = execSync('npm run build', {
+          cwd: process.cwd(),
+          encoding: 'utf8',
+          timeout: 120000,
+        }).slice(-500);
+      } catch (buildErr: any) {
+        postMergeStatus = 'failed';
+        buildOutput = ((buildErr.stderr || buildErr.stdout || '') + '').slice(-500);
+      }
+      changeset.postMergeStatus = postMergeStatus as any;
+      await AppDataSource.getRepository(ProjectChangeset).save(changeset);
+      res.json({
+        changeset_id: changeset.id,
+        post_merge_status: postMergeStatus,
+        build_output: buildOutput,
+      });
+    } catch (err) {
+      console.error('Post-merge verify error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
 // ─── Changeset Review Comments (local-only discussions) ──────────────────────
 
 router.post(
