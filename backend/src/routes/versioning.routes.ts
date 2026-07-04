@@ -1741,6 +1741,14 @@ router.post(
         gitea_sync: syncResult,
       });
     } catch (err) {
+      if (err instanceof WholeFileUpsertRegressionError) {
+        res.status(409).json({
+          detail: 'whole-file upsert would regress post-base additions',
+          path: err.path,
+          regressed_line_count: err.regressedLineCount,
+        });
+        return;
+      }
       if (err instanceof BranchHeadChangedError) {
         res.status(409).json({ detail: 'Branch head changed during merge; rebase the changeset and retry' });
         return;
@@ -1920,6 +1928,33 @@ async function mergeChangeset(
     return { conflict: true, changeset: await manager.save(ProjectChangeset, changeset) };
   }
 
+  // ── Whole-file upsert regression guard ─────────────────────────────────────
+  // A whole-file upsert whose content was generated from a stale working copy
+  // can silently delete lines added to HEAD after the op's base_revision_id:
+  // if HEAD has a line that exists neither in the base-revision content nor in
+  // op.content, applying op.content as a full overwrite would clobber it. Run
+  // this before detectFileConflicts so the caller gets a specific, actionable
+  // 409 instead of a generic file-revision conflict. (gk R9b)
+  for (const op of changeset.fileOps) {
+    if (op.op !== 'upsert' || !op.base_revision_id) continue;
+    const currentFile = await manager.findOne(ProjectFile, {
+      where: { projectId, path: op.path, deletedAt: IsNull() },
+    });
+    if (!currentFile) continue; // brand-new file: nothing on HEAD to regress
+    const baseRevision = await manager.findOne(ProjectFileRevision, {
+      where: { id: op.base_revision_id, projectId, path: op.path },
+    });
+    if (!baseRevision) continue; // let detectFileConflicts report the bad revision
+    const regressedLineCount = countRegressedHeadLines(
+      baseRevision.content,
+      currentFile.content,
+      op.content ?? '',
+    );
+    if (regressedLineCount > 0) {
+      throw new WholeFileUpsertRegressionError(op.path, regressedLineCount);
+    }
+  }
+
   const conflicts = await detectFileConflicts(manager, projectId, changeset.fileOps);
   if (conflicts.length > 0) {
     changeset.status = ProjectChangesetStatus.CONFLICT;
@@ -2044,6 +2079,19 @@ async function mergeChangeset(
 class BranchHeadChangedError extends Error {
   constructor() {
     super('Branch head changed during merge');
+  }
+}
+
+// Thrown by mergeChangeset when a whole-file upsert would silently delete lines
+// that were added to HEAD after the op's base_revision_id (a stale-working-copy
+// overwrite). Caught by the merge endpoint and surfaced as a specific HTTP 409.
+class WholeFileUpsertRegressionError extends Error {
+  path: string;
+  regressedLineCount: number;
+  constructor(path: string, regressedLineCount: number) {
+    super('whole-file upsert would regress post-base additions');
+    this.path = path;
+    this.regressedLineCount = regressedLineCount;
   }
 }
 
@@ -2289,6 +2337,21 @@ async function detectFileConflicts(
     }
   }
   return conflicts;
+}
+
+// Count HEAD lines that a whole-file upsert would silently delete: lines that
+// exist in the current HEAD content but in neither the base-revision content
+// (the version the op claims to derive from) nor the op's proposed content.
+// Such lines were added to HEAD after the base revision and would be clobbered
+// by applying op.content as a full overwrite. Returns 0 when the op is safe.
+function countRegressedHeadLines(baseContent: string, headContent: string, opContent: string): number {
+  const baseLines = new Set(baseContent.split('\n'));
+  const opLines = new Set(opContent.split('\n'));
+  let regressed = 0;
+  for (const line of headContent.split('\n')) {
+    if (!baseLines.has(line) && !opLines.has(line)) regressed++;
+  }
+  return regressed;
 }
 
 function computeChangedLineRanges(base: string, target: string): Array<{ start: number; end: number }> {

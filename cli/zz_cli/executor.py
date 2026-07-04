@@ -454,92 +454,171 @@ class ExecutorDaemon:
     def detect_code_changes(self):
         """Detect uncommitted file changes in the working directory.
 
-        Uses .last-file-snapshot to compare file listing (avoids git subprocess
-        which fails under launchd TCC). Returns list of {path, content}.
+        Prefers ``git diff --name-only HEAD`` (plus untracked files via
+        ``git ls-files --others --exclude-standard``), which is reliable. Degrades
+        to the snapshot-mtime method when the cwd is not a git repo or git is
+        unavailable. Returns a list of file ops:
+          - modified / new  -> {path, op: 'upsert', content}
+          - deleted         -> {path, op: 'delete', content: ''}
         """
         import os as _os
-        import json as _json
         cwd = _os.getcwd()
-        snapshot_file = _os.path.join(cwd, '.zz-agent-file-snapshot.json')
+        # R9a: try git first (replaces the unreliable snapshot-mtime detection).
         try:
-            # Walk the working directory (top-level + 2 levels deep, skip .git/node_modules)
-            skip_dirs = {'.git', 'node_modules', 'dist', '__pycache__', '.zz-agent', 'backend/dist'}
-            current_files = {}
-            for root, dirs, files in _os.walk(cwd):
-                dirs[:] = [d for d in dirs if d not in skip_dirs]
-                depth = root.replace(cwd, '').count(_os.sep)
-                if depth > 3:
-                    dirs[:] = []
-                    continue
-                for fname in files:
-                    fpath = _os.path.join(root, fname)
-                    relpath = _os.path.relpath(fpath, cwd)
-                    try:
-                        mtime = _os.path.getmtime(fpath)
-                        current_files[relpath] = mtime
-                    except OSError:
-                        pass
-
-            # Load previous snapshot
-            prev_files = {}
-            if _os.path.exists(snapshot_file):
-                try:
-                    with open(snapshot_file) as f:
-                        prev_files = _json.load(f)
-                except Exception:
-                    pass
-
-            # Find new or modified files
-            changed = []
-            for relpath, mtime in current_files.items():
-                if relpath not in prev_files or prev_files[relpath] != mtime:
-                    # Skip the snapshot file itself + .agent artifacts
-                    if 'snapshot' in relpath or relpath.startswith('.agent/'):
-                        continue
-                    changed.append(relpath)
-
-            # Save snapshot
-            try:
-                with open(snapshot_file, 'w') as f:
-                    _json.dump(current_files, f)
-            except OSError:
-                pass
-
-            print(f"  🔍 detect: {len(changed)} changed files (of {len(current_files)} tracked)", flush=True)
-            if not changed:
-                return []
-
-            # Read content of each changed file
-            file_ops = []
-            for path in changed:
-                try:
-                    abs_path = _os.path.join(cwd, path)
-                    with open(abs_path, 'r') as f:
-                        content = f.read()
-                    file_ops.append({'path': path, 'content': content})
-                except (IOError, UnicodeDecodeError):
-                    pass
-            return file_ops
+            return self._detect_code_changes_git(cwd)
+        except Exception as e:
+            print(f"  ⚠ git diff unavailable ({e}); falling back to snapshot-mtime detection", flush=True)
+        try:
+            return self._detect_code_changes_snapshot(cwd)
         except Exception as e:
             print(f"  ⚠ detect_code_changes error: {e}", flush=True)
             return []
 
+    def _detect_code_changes_git(self, cwd):
+        """Detect changes via git. Raises on non-git cwd / missing git binary."""
+        import os as _os
+        # Tracked files modified or deleted vs HEAD.
+        diff = subprocess.run(
+            ['git', 'diff', '--name-only', 'HEAD'],
+            capture_output=True, text=True, cwd=cwd, check=True,
+        )
+        tracked = [ln for ln in diff.stdout.splitlines() if ln.strip()]
+        # Untracked new files (respecting .gitignore / .git/info/exclude).
+        others = subprocess.run(
+            ['git', 'ls-files', '--others', '--exclude-standard'],
+            capture_output=True, text=True, cwd=cwd, check=True,
+        )
+        untracked = [ln for ln in others.stdout.splitlines() if ln.strip()]
+
+        # Skip patterns preserved from the snapshot method.
+        skip_tokens = ('.agent/', 'node_modules/', 'dist/')
+
+        def _skip(path):
+            norm = path.replace('\\', '/')
+            if 'snapshot' in norm:  # never submit the snapshot file itself
+                return True
+            return any(tok in norm for tok in skip_tokens)
+
+        def _read(path):
+            try:
+                with open(_os.path.join(cwd, path), 'r') as f:
+                    return f.read()
+            except (IOError, UnicodeDecodeError):
+                return None
+
+        file_ops = []
+        seen = set()
+        # Tracked changes: modified vs HEAD. A path missing from disk was deleted.
+        for path in tracked:
+            if _skip(path) or path in seen:
+                continue
+            seen.add(path)
+            if not _os.path.exists(_os.path.join(cwd, path)):
+                file_ops.append({'path': path, 'op': 'delete', 'content': ''})
+            else:
+                content = _read(path)
+                if content is not None:
+                    file_ops.append({'path': path, 'op': 'upsert', 'content': content})
+        # Untracked new files: always upserts.
+        for path in untracked:
+            if _skip(path) or path in seen:
+                continue
+            seen.add(path)
+            content = _read(path)
+            if content is not None:
+                file_ops.append({'path': path, 'op': 'upsert', 'content': content})
+
+        print(f"  🔍 detect: {len(file_ops)} changed files "
+              f"(git diff: {len(tracked)} tracked, {len(untracked)} untracked)", flush=True)
+        return file_ops
+
+    def _detect_code_changes_snapshot(self, cwd):
+        """Fallback: snapshot-mtime comparison for non-git working dirs.
+
+        Cannot distinguish deletions, so only emits op='upsert' for new/modified
+        files. Kept as a safety net for cwd that is not a git repo.
+        """
+        import os as _os
+        import json as _json
+        snapshot_file = _os.path.join(cwd, '.zz-agent-file-snapshot.json')
+        # Walk the working directory (top-level + a few levels deep).
+        skip_dirs = {'.git', 'node_modules', 'dist', '__pycache__', '.zz-agent', 'backend/dist'}
+        current_files = {}
+        for root, dirs, files in _os.walk(cwd):
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            depth = root.replace(cwd, '').count(_os.sep)
+            if depth > 3:
+                dirs[:] = []
+                continue
+            for fname in files:
+                fpath = _os.path.join(root, fname)
+                relpath = _os.path.relpath(fpath, cwd)
+                try:
+                    mtime = _os.path.getmtime(fpath)
+                    current_files[relpath] = mtime
+                except OSError:
+                    pass
+
+        # Load previous snapshot.
+        prev_files = {}
+        if _os.path.exists(snapshot_file):
+            try:
+                with open(snapshot_file) as f:
+                    prev_files = _json.load(f)
+            except Exception:
+                pass
+
+        # Find new or modified files.
+        changed = []
+        for relpath, mtime in current_files.items():
+            if relpath not in prev_files or prev_files[relpath] != mtime:
+                # Skip the snapshot file itself + .agent artifacts.
+                if 'snapshot' in relpath or relpath.startswith('.agent/'):
+                    continue
+                changed.append(relpath)
+
+        # Save snapshot.
+        try:
+            with open(snapshot_file, 'w') as f:
+                _json.dump(current_files, f)
+        except OSError:
+            pass
+
+        print(f"  🔍 detect: {len(changed)} changed files "
+              f"(snapshot mtime, of {len(current_files)} tracked)", flush=True)
+        if not changed:
+            return []
+
+        file_ops = []
+        for path in changed:
+            try:
+                abs_path = _os.path.join(cwd, path)
+                with open(abs_path, 'r') as f:
+                    content = f.read()
+                file_ops.append({'path': path, 'op': 'upsert', 'content': content})
+            except (IOError, UnicodeDecodeError):
+                pass
+        return file_ops
+
     def submit_code_changeset(self, pid, oid, tid, file_ops):
         """Submit actual code changes as a changeset before completing the task.
 
-        Returns the changeset id, or None if submission failed.
+        Returns the changeset id, or None if submission failed. Always fetches a
+        base_revision_id for files that already exist on the platform, and honors
+        the per-op 'op' field ('upsert' by default, or 'delete' for removed files).
         """
         if not file_ops:
             return None
-        # Fetch base_revision_id for each existing file
         enriched_ops = []
         for op in file_ops:
             path = op['path']
-            # Check if file exists on platform (need base_revision_id)
+            op_type = op.get('op') or 'upsert'
+            # Always fetch base_revision_id for existing files (needed for both
+            # upsert against the right revision and delete of the right revision).
             r = self.api('GET', f'/v1/projects/{pid}/files?exact_path={path}')
             data = r.get('data', [])
             base_rev = data[0].get('current_revision_id') if data else None
-            new_op = {'op': 'upsert', 'path': path, 'content': op['content']}
+            new_op = {'op': op_type, 'path': path, 'content': op.get('content', '')}
             if base_rev:
                 new_op['base_revision_id'] = base_rev
             enriched_ops.append(new_op)
