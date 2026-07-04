@@ -425,7 +425,7 @@ class ExecutorDaemon:
 
     def submit_task(self, pid, oid, tid, result_md, evidence=None):
         return self.api('POST', f'/v1/projects/{pid}/orchestrations/{oid}/tasks/{tid}/complete', {
-            'result_md': result_md, 'evidence': evidence or {}, 'status': 'ready_for_review',
+            'result_md': result_md, 'evidence': evidence or {'files_changed': []}, 'status': 'ready_for_review',
         })
 
     def review_changeset(self, pid, cs_id, decision, notes=''):
