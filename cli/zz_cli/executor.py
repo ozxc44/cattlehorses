@@ -429,43 +429,75 @@ class ExecutorDaemon:
         })
 
     def detect_code_changes(self):
-        """Detect uncommitted file changes in the working directory via git.
+        """Detect uncommitted file changes in the working directory.
 
-        Returns a list of {path, content} for changed/added files (not deletions).
-        Uses git diff against HEAD so it captures both staged and unstaged changes.
+        Uses .last-file-snapshot to compare file listing (avoids git subprocess
+        which fails under launchd TCC). Returns list of {path, content}.
         """
         import os as _os
+        import json as _json
         cwd = _os.getcwd()
+        snapshot_file = _os.path.join(cwd, '.zz-agent-file-snapshot.json')
         try:
-            # Get list of changed files (added/modified, not deleted)
-            r = subprocess.run(
-                ['git', 'diff', '--name-only', '--diff-filter=AM', 'HEAD'],
-                capture_output=True, text=True, timeout=10, cwd=cwd,
-            )
-            changed = [f.strip() for f in r.stdout.strip().split('\n') if f.strip()]
-            # Also check untracked files
-            r2 = subprocess.run(
-                ['git', 'ls-files', '--others', '--exclude-standard'],
-                capture_output=True, text=True, timeout=10, cwd=cwd,
-            )
-            untracked = [f.strip() for f in r2.stdout.strip().split('\n') if f.strip()]
-            all_changed = changed + untracked
-            print(f"  🔍 detect_code_changes: cwd={cwd} changed={len(changed)} untracked={len(untracked)}", flush=True)
-            if not all_changed:
+            # Walk the working directory (top-level + 2 levels deep, skip .git/node_modules)
+            skip_dirs = {'.git', 'node_modules', 'dist', '__pycache__', '.zz-agent', 'backend/dist'}
+            current_files = {}
+            for root, dirs, files in _os.walk(cwd):
+                dirs[:] = [d for d in dirs if d not in skip_dirs]
+                depth = root.replace(cwd, '').count(_os.sep)
+                if depth > 3:
+                    dirs[:] = []
+                    continue
+                for fname in files:
+                    fpath = _os.path.join(root, fname)
+                    relpath = _os.path.relpath(fpath, cwd)
+                    try:
+                        mtime = _os.path.getmtime(fpath)
+                        current_files[relpath] = mtime
+                    except OSError:
+                        pass
+
+            # Load previous snapshot
+            prev_files = {}
+            if _os.path.exists(snapshot_file):
+                try:
+                    with open(snapshot_file) as f:
+                        prev_files = _json.load(f)
+                except Exception:
+                    pass
+
+            # Find new or modified files
+            changed = []
+            for relpath, mtime in current_files.items():
+                if relpath not in prev_files or prev_files[relpath] != mtime:
+                    # Skip the snapshot file itself + .agent artifacts
+                    if 'snapshot' in relpath or relpath.startswith('.agent/'):
+                        continue
+                    changed.append(relpath)
+
+            # Save snapshot
+            try:
+                with open(snapshot_file, 'w') as f:
+                    _json.dump(current_files, f)
+            except OSError:
+                pass
+
+            print(f"  🔍 detect: {len(changed)} changed files (of {len(current_files)} tracked)", flush=True)
+            if not changed:
                 return []
 
             # Read content of each changed file
             file_ops = []
-            for path in all_changed:
+            for path in changed:
                 try:
-                    abs_path = _os.path.join(cwd, path) if not _os.path.isabs(path) else path
+                    abs_path = _os.path.join(cwd, path)
                     with open(abs_path, 'r') as f:
                         content = f.read()
                     file_ops.append({'path': path, 'content': content})
                 except (IOError, UnicodeDecodeError):
-                    pass  # skip binary or unreadable files
+                    pass
             return file_ops
-        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+        except Exception as e:
             print(f"  ⚠ detect_code_changes error: {e}", flush=True)
             return []
 
