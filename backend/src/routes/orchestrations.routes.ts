@@ -216,6 +216,136 @@ router.get(
   },
 );
 
+/**
+ * GET /v1/projects/:project_id/loop-status
+ *
+ * Operational overview for the autonomous loop — a single dashboard payload the
+ * PM / main agent polls to monitor loop health: which workers are online,
+ * which changesets are awaiting review, how many tasks are running, which
+ * tasks have stalled (dispatched/running but quiet for too long), and how the
+ * project's orchestrations break down by status.
+ *
+ * Auth: JWT user OR agent API key, both requiring the ViewProject permission.
+ * Agents are already verified (by requirePermission) to belong to this project,
+ * so the payload is project-wide — this is an operational overview, not a
+ * per-worker scoped view.
+ *
+ * Response shape:
+ *   {
+ *     workers: [{ id, name, online, health_status, last_heartbeat_age_seconds }],
+ *     pending_changesets: [{ id, title, status, age_minutes }],
+ *     running_tasks: number,
+ *     stalled_tasks: [{ id, title, status, age_minutes }],
+ *     orchestrations: { running, blocked, completed }
+ *   }
+ */
+router.get(
+  '/v1/projects/:project_id/loop-status',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const status = await buildLoopStatus(projectId);
+      res.json(status);
+    } catch (err) {
+      console.error('Loop status error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+// ── R16c: project loop throughput summary ───────────────────────────────────
+router.get(
+  '/v1/projects/:project_id/metrics',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+
+      const orchestrationRepo = AppDataSource.getRepository(ProjectOrchestration);
+      const taskRepo = AppDataSource.getRepository(ProjectOrchestrationTask);
+      const changesetRepo = AppDataSource.getRepository(ProjectChangeset);
+      const agentRepo = AppDataSource.getRepository(Agent);
+
+      const [totalOrchestrations, completedOrchestrations, tasks, changesets] = await Promise.all([
+        orchestrationRepo.count({ where: { projectId } }),
+        orchestrationRepo.count({ where: { projectId, status: ProjectOrchestrationStatus.COMPLETED } }),
+        taskRepo.find({ where: { projectId }, relations: ['assignedAgent'] }),
+        changesetRepo.find({ where: { projectId } }),
+      ]);
+
+      const completedTasks = tasks.filter(
+        (task) => task.status === ProjectOrchestrationTaskStatus.APPROVED,
+      );
+
+      const autoMergedChangesets = changesets.filter(
+        (changeset) => changeset.status === ProjectChangesetStatus.MERGED,
+      ).length;
+      const rejectedChangesets = changesets.filter(
+        (changeset) => changeset.status === ProjectChangesetStatus.REJECTED,
+      ).length;
+
+      const avgTaskDurationMinutes = computeAverageDurationMinutes(
+        completedTasks.map((task) => ({ start: task.createdAt, end: task.completedAt })),
+      );
+
+      const reviewedChangesets = changesets.filter((changeset) => changeset.reviewedAt !== null);
+      const avgChangesetReviewTimeMinutes = computeAverageDurationMinutes(
+        reviewedChangesets.map((changeset) => ({ start: changeset.createdAt, end: changeset.reviewedAt! })),
+      );
+
+      const completedTasksByAgent = groupByAgentId(completedTasks, (task) => task.assignedAgentId);
+      const mergedChangesetsByAgent = groupByAgentId(
+        changesets.filter((changeset) => changeset.status === ProjectChangesetStatus.MERGED),
+        (changeset) => changeset.createdByAgentId,
+      );
+
+      const workerAgentIds = new Set<string>([
+        ...Object.keys(completedTasksByAgent),
+        ...Object.keys(mergedChangesetsByAgent),
+      ]);
+      const workerAgents = workerAgentIds.size > 0
+        ? await agentRepo.findBy({ id: In(Array.from(workerAgentIds)) })
+        : [];
+      const agentNameById = new Map(workerAgents.map((agent) => [agent.id, agent.name]));
+
+      const workerStats = Array.from(workerAgentIds)
+        .map((agentId) => {
+          const agentTasks = completedTasksByAgent[agentId] ?? [];
+          const agentChangesets = mergedChangesetsByAgent[agentId] ?? [];
+          return {
+            agent_name: agentNameById.get(agentId) ?? null,
+            tasks_completed: agentTasks.length,
+            changesets_merged: agentChangesets.length,
+            avg_duration_minutes: computeAverageDurationMinutes(
+              agentTasks.map((task) => ({ start: task.createdAt, end: task.completedAt })),
+            ),
+          };
+        })
+        .sort((a, b) => (a.agent_name ?? '').localeCompare(b.agent_name ?? ''));
+
+      res.json({
+        total_orchestrations: totalOrchestrations,
+        completed_orchestrations: completedOrchestrations,
+        total_tasks: tasks.length,
+        completed_tasks: completedTasks.length,
+        auto_merged_changesets: autoMergedChangesets,
+        rejected_changesets: rejectedChangesets,
+        avg_task_duration_minutes: avgTaskDurationMinutes,
+        avg_changeset_review_time_minutes: avgChangesetReviewTimeMinutes,
+        worker_stats: workerStats,
+      });
+    } catch (err) {
+      console.error('Get project metrics error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
 router.get(
   '/v1/projects/:project_id/orchestrations/:orchestration_id',
   authenticateJwtOrAgentApiKey,
@@ -235,6 +365,159 @@ router.get(
       res.json(serializeOrchestration(loaded.orchestration, loaded.tasks));
     } catch (err) {
       console.error('Get orchestration error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/v1/projects/:project_id/orchestrations/:orchestration_id/timeline',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const orchestrationId = req.params.orchestration_id;
+
+      const orchestration = await loadOrchestration(projectId, orchestrationId);
+      if (!orchestration) {
+        res.status(404).json({ detail: 'Orchestration not found' });
+        return;
+      }
+
+      const tasks = await AppDataSource.getRepository(ProjectOrchestrationTask).find({
+        where: { projectId, orchestrationId },
+        relations: ['assignedAgent'],
+        order: { createdAt: 'ASC' },
+      });
+
+      if (!canViewOrchestration(req, orchestration, tasks)) {
+        res.status(403).json({ detail: 'Agent is not part of this orchestration' });
+        return;
+      }
+
+      const [changesets] = await Promise.all([
+        AppDataSource.getRepository(ProjectChangeset).find({
+          where: { projectId, orchestrationId },
+          order: { createdAt: 'ASC' },
+        }),
+      ]);
+
+      const events: Array<{
+        timestamp: string;
+        event_type: string;
+        task_id: string | null;
+        task_title: string | null;
+        agent_name: string | null;
+        from_status: string | null;
+        to_status: string | null;
+        detail: Record<string, unknown> | null;
+      }> = [];
+
+      for (const task of tasks) {
+        const agentName = task.assignedAgent?.name ?? null;
+
+        events.push({
+          timestamp: task.createdAt.toISOString(),
+          event_type: 'task_created',
+          task_id: task.id,
+          task_title: task.title,
+          agent_name: agentName,
+          from_status: null,
+          to_status: ProjectOrchestrationTaskStatus.PENDING,
+          detail: null,
+        });
+
+        if (task.dispatchedAt) {
+          events.push({
+            timestamp: task.dispatchedAt.toISOString(),
+            event_type: 'task_dispatched',
+            task_id: task.id,
+            task_title: task.title,
+            agent_name: agentName,
+            from_status: ProjectOrchestrationTaskStatus.PENDING,
+            to_status: ProjectOrchestrationTaskStatus.DISPATCHED,
+            detail: null,
+          });
+        }
+
+        if (task.claimedAt) {
+          events.push({
+            timestamp: task.claimedAt.toISOString(),
+            event_type: 'task_claimed',
+            task_id: task.id,
+            task_title: task.title,
+            agent_name: agentName,
+            from_status: ProjectOrchestrationTaskStatus.DISPATCHED,
+            to_status: ProjectOrchestrationTaskStatus.RUNNING,
+            detail: null,
+          });
+        }
+
+        if (task.completedAt) {
+          events.push({
+            timestamp: task.completedAt.toISOString(),
+            event_type: 'task_completed',
+            task_id: task.id,
+            task_title: task.title,
+            agent_name: agentName,
+            from_status: ProjectOrchestrationTaskStatus.RUNNING,
+            to_status: task.status,
+            detail: null,
+          });
+        }
+
+        if (task.reviewedAt) {
+          const reviewDecision = task.status === ProjectOrchestrationTaskStatus.APPROVED
+            ? 'approved'
+            : task.status === ProjectOrchestrationTaskStatus.CHANGES_REQUESTED
+              ? 'changes_requested'
+              : null;
+          events.push({
+            timestamp: task.reviewedAt.toISOString(),
+            event_type: 'pm_reviewed',
+            task_id: task.id,
+            task_title: task.title,
+            agent_name: agentName,
+            from_status: ProjectOrchestrationTaskStatus.READY_FOR_REVIEW,
+            to_status: task.status,
+            detail: reviewDecision ? { decision: reviewDecision } : null,
+          });
+        }
+      }
+
+      for (const changeset of changesets) {
+        events.push({
+          timestamp: changeset.createdAt.toISOString(),
+          event_type: 'changeset_submitted',
+          task_id: changeset.taskId ?? null,
+          task_title: null,
+          agent_name: null,
+          from_status: null,
+          to_status: changeset.status,
+          detail: { changeset_id: changeset.id, title: changeset.title },
+        });
+
+        if (changeset.mergedAt) {
+          events.push({
+            timestamp: changeset.mergedAt.toISOString(),
+            event_type: 'changeset_merged',
+            task_id: changeset.taskId ?? null,
+            task_title: null,
+            agent_name: null,
+            from_status: changeset.status,
+            to_status: ProjectChangesetStatus.MERGED,
+            detail: { changeset_id: changeset.id, merged_commit_id: changeset.mergedCommitId ?? null },
+          });
+        }
+      }
+
+      events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+      res.json({ data: events });
+    } catch (err) {
+      console.error('Get orchestration timeline error:', err);
       res.status(500).json({ detail: 'Internal server error' });
     }
   },
@@ -3192,6 +3475,179 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function sha256(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+// ── Loop status helpers (GET /v1/projects/:project_id/loop-status) ───────────
+
+/** A task is "stalled" when it is dispatched/running but has been quiet for at
+ *  least this long. Configurable via LOOP_STALL_MINUTES for tests. */
+const DEFAULT_LOOP_STALL_MINUTES = 15;
+
+function loopStallMs(): number {
+  const raw = process.env.LOOP_STALL_MINUTES;
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed * 60_000;
+  }
+  return DEFAULT_LOOP_STALL_MINUTES * 60_000;
+}
+
+/** Whole-minutes difference between a past date and a "now" epoch ms, floored at 0. */
+function minutesBetween(from: Date | string | null | undefined, nowMs: number): number {
+  if (!from) return 0;
+  const fromMs = from instanceof Date ? from.getTime() : new Date(from).getTime();
+  if (!Number.isFinite(fromMs)) return 0;
+  return Math.max(0, Math.floor((nowMs - fromMs) / 60_000));
+}
+
+/** Latest non-null date among the given values (null when all are absent). */
+function latestOf(...dates: Array<Date | null | undefined>): Date | null {
+  let best: Date | null = null;
+  for (const d of dates) {
+    if (d && (best === null || d.getTime() > best.getTime())) best = d;
+  }
+  return best;
+}
+
+/**
+ * Build the project loop-status overview. Project-wide by design (agents calling
+ * are already verified project members via requirePermission).
+ *
+ * Orchestration buckets cover every status so nothing is invisible:
+ *   running   = planning | running | ready_for_acceptance (in-flight)
+ *   blocked   = blocked | failed (needs intervention)
+ *   completed = completed | cancelled (terminal)
+ */
+async function buildLoopStatus(projectId: string) {
+  const now = Date.now();
+  const stallCutoff = new Date(now - loopStallMs());
+
+  const [agents, changesets, tasks, orchestrations] = await Promise.all([
+    AppDataSource.getRepository(Agent).find({
+      where: { projectId },
+      order: { name: 'ASC' },
+    }),
+    AppDataSource.getRepository(ProjectChangeset).find({
+      where: { projectId },
+      order: { updatedAt: 'DESC' },
+    }),
+    AppDataSource.getRepository(ProjectOrchestrationTask).find({
+      where: { projectId },
+    }),
+    AppDataSource.getRepository(ProjectOrchestration).find({
+      where: { projectId },
+    }),
+  ]);
+
+  const workers = agents.map((agent) => {
+    const presence = getAgentPresence(agent, now);
+    return {
+      id: agent.id,
+      name: agent.name,
+      online: presence.isOnline,
+      health_status: presence.healthStatus,
+      last_heartbeat_age_seconds:
+        presence.heartbeatAgeMs !== null ? Math.floor(presence.heartbeatAgeMs / 1000) : null,
+    };
+  });
+
+  const terminalChangesetStatuses = [
+    ProjectChangesetStatus.MERGED,
+    ProjectChangesetStatus.REJECTED,
+    ProjectChangesetStatus.CANCELLED,
+  ];
+  const pending_changesets = changesets
+    .filter((cs) => !terminalChangesetStatuses.includes(cs.status))
+    .map((cs) => ({
+      id: cs.id,
+      title: cs.title,
+      status: cs.status,
+      age_minutes: minutesBetween(cs.createdAt, now),
+    }));
+
+  const stalledTaskStatuses = [
+    ProjectOrchestrationTaskStatus.DISPATCHED,
+    ProjectOrchestrationTaskStatus.RUNNING,
+  ];
+  const stalled_tasks = tasks
+    .filter((task) => stalledTaskStatuses.includes(task.status))
+    .map((task) => ({
+      task,
+      // Stall = worker inactivity. Anchor on worker-activity timestamps, NOT
+      // createdAt (that is when the PM created the row, which would mask a
+      // freshly-inserted-but-long-dispatched task). A task lacking all three
+      // has no dispatch footprint yet and is treated as not stalled.
+      lastActivityAt: latestOf(task.progressAt, task.claimedAt, task.dispatchedAt),
+    }))
+    .filter((entry) => entry.lastActivityAt !== null && entry.lastActivityAt.getTime() < stallCutoff.getTime())
+    .map((entry) => ({
+      id: entry.task.id,
+      title: entry.task.title,
+      status: entry.task.status,
+      age_minutes: minutesBetween(entry.lastActivityAt, now),
+    }))
+    .sort((a, b) => b.age_minutes - a.age_minutes);
+
+  const running_tasks = tasks.filter(
+    (task) => task.status === ProjectOrchestrationTaskStatus.RUNNING,
+  ).length;
+
+  const runningOrchestrationStatuses = [
+    ProjectOrchestrationStatus.PLANNING,
+    ProjectOrchestrationStatus.RUNNING,
+    ProjectOrchestrationStatus.READY_FOR_ACCEPTANCE,
+  ];
+  const blockedOrchestrationStatuses = [
+    ProjectOrchestrationStatus.BLOCKED,
+    ProjectOrchestrationStatus.FAILED,
+  ];
+  const completedOrchestrationStatuses = [
+    ProjectOrchestrationStatus.COMPLETED,
+    ProjectOrchestrationStatus.CANCELLED,
+  ];
+
+  return {
+    workers,
+    pending_changesets,
+    running_tasks,
+    stalled_tasks,
+    orchestrations: {
+      running: orchestrations.filter((o) => runningOrchestrationStatuses.includes(o.status)).length,
+      blocked: orchestrations.filter((o) => blockedOrchestrationStatuses.includes(o.status)).length,
+      completed: orchestrations.filter((o) => completedOrchestrationStatuses.includes(o.status)).length,
+    },
+  };
+}
+
+function computeAverageDurationMinutes(
+  intervals: Array<{ start: Date | string | null | undefined; end: Date | string | null | undefined }>,
+): number | null {
+  if (intervals.length === 0) return null;
+  let totalMs = 0;
+  let count = 0;
+  for (const { start, end } of intervals) {
+    const startDate = start ? new Date(start) : null;
+    const endDate = end ? new Date(end) : null;
+    if (startDate && endDate && !Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime())) {
+      totalMs += endDate.getTime() - startDate.getTime();
+      count += 1;
+    }
+  }
+  if (count === 0) return null;
+  const minutes = totalMs / count / 60_000;
+  return Math.round(minutes * 100) / 100;
+}
+
+function groupByAgentId<T>(items: T[], getAgentId: (item: T) => string | null | undefined): Record<string, T[]> {
+  const groups: Record<string, T[]> = {};
+  for (const item of items) {
+    const agentId = getAgentId(item);
+    if (!agentId) continue;
+    const list = groups[agentId] ?? [];
+    list.push(item);
+    groups[agentId] = list;
+  }
+  return groups;
 }
 
 export default router;
