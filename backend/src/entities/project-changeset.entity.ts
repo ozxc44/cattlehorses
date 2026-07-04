@@ -166,6 +166,9 @@ export class ProjectChangeset {
   reviewedAt?: Date;
 
   @Column({ name: 'merged_at', nullable: true })
+
+  @Column({ name: 'merge_status', type: 'varchar', nullable: true })
+  mergeStatus?: ProjectChangesetMergeStatus | null;
   mergedAt?: Date;
 
   @CreateDateColumn({ name: 'created_at' })
@@ -205,4 +208,11 @@ export class ProjectChangeset {
   @ManyToOne(() => ProjectOrchestrationTask, { nullable: true })
   @JoinColumn({ name: 'task_id' })
   task?: ProjectOrchestrationTask | null;
+}
+
+export enum ProjectChangesetMergeStatus {
+  CLEAN = 'clean',
+  STALE = 'stale',
+  CONFLICT = 'conflict',
+  NEEDS_REBASE = 'needs_rebase',
 }
