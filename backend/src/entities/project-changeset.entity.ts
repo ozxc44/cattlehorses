@@ -79,6 +79,7 @@ export type ProjectChangesetMergeQueueState = {
 @Index(['projectId', 'status'])
 @Index(['projectId', 'branchId', 'status'])
 @Index(['projectId', 'taskId'])
+@Index(['projectId', 'idempotencyKey'])
 export class ProjectChangeset {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -161,6 +162,9 @@ export class ProjectChangeset {
 
   @Column({ name: 'task_id', type: 'uuid', nullable: true })
   taskId?: string | null;
+
+  @Column({ name: 'idempotency_key', type: 'varchar', length: 255, nullable: true })
+  idempotencyKey?: string | null;
 
   @Column({ name: 'reviewed_at', nullable: true })
   reviewedAt?: Date;

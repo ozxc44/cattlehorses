@@ -1094,7 +1094,22 @@ router.post(
         return;
       }
 
+      const idempotencyKey = typeof req.body.idempotency_key === 'string' && req.body.idempotency_key.trim()
+        ? req.body.idempotency_key.trim()
+        : null;
+
       const changesetRepo = AppDataSource.getRepository(ProjectChangeset);
+
+      if (idempotencyKey) {
+        const existing = await changesetRepo.findOne({
+          where: { projectId, idempotencyKey },
+        });
+        if (existing) {
+          res.status(200).json(serializeChangeset(existing));
+          return;
+        }
+      }
+
       const changeset = await changesetRepo.save(changesetRepo.create({
         projectId,
         branchId: branch.id,
@@ -1109,6 +1124,7 @@ router.post(
         createdByAgentId: actor.agentId,
         orchestrationId: typeof req.body.orchestration_id === 'string' ? req.body.orchestration_id : null,
         taskId: typeof req.body.task_id === 'string' ? req.body.task_id : null,
+        idempotencyKey,
       }));
 
       res.status(201).json(serializeChangeset(changeset));
@@ -3868,6 +3884,7 @@ function serializeChangeset(changeset: ProjectChangeset) {
     merged_commit_id: changeset.mergedCommitId ?? null,
     orchestration_id: changeset.orchestrationId ?? null,
     task_id: changeset.taskId ?? null,
+    idempotency_key: changeset.idempotencyKey ?? null,
     reviewed_at: changeset.reviewedAt ?? null,
     merged_at: changeset.mergedAt ?? null,
     created_at: changeset.createdAt,

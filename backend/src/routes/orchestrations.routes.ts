@@ -1,6 +1,6 @@
 import crypto, { randomUUID } from 'crypto';
 import { Router, Request, Response } from 'express';
-import { EntityManager, In, Brackets, SelectQueryBuilder } from 'typeorm';
+import { EntityManager, In, Brackets, SelectQueryBuilder, IsNull, FindOptionsWhere } from 'typeorm';
 import { AppDataSource } from '../data-source';
 import { authenticateJwtOrAgentApiKey, extractProjectId } from '../middleware/auth';
 import { requirePermission, Permission } from '../middleware/rbac';
@@ -559,6 +559,26 @@ router.post(
         : null;
       if (assignedAgentId && !await ensureAgentsExistAndDispatchable(res, projectId, [assignedAgentId])) return;
 
+      // ── R18a: idempotent dispatch — reject duplicate active task ──────────
+      // A duplicate = same dedup_hash (normalized title+goal) for the same agent
+      // in this orchestration, while the prior task is still in an active status
+      // (dispatched/running/changes_requested). Terminal or review-state tasks
+      // free up the slot so the same logical task can be dispatched again.
+      const dedupHash = computeDedupHash(title.value, goal.value);
+      const dedupWhere: FindOptionsWhere<ProjectOrchestrationTask> = {
+        orchestrationId: orchestration.id,
+        status: In(TASK_DEDUP_ACTIVE_STATUSES),
+        assignedAgentId: assignedAgentId ? assignedAgentId : IsNull(),
+      };
+      const activeForAgent = await AppDataSource.getRepository(ProjectOrchestrationTask).find({ where: dedupWhere });
+      const duplicate = activeForAgent.find(
+        (t) => (t.metadata as Record<string, unknown> | null | undefined)?.dedup_hash === dedupHash,
+      );
+      if (duplicate) {
+        res.status(409).json({ detail: 'duplicate active task', existing_task_id: duplicate.id });
+        return;
+      }
+
       const task = await AppDataSource.transaction(async (manager) => {
         const taskId = randomUUID();
         const isDispatched = req.body.dispatch !== false;
@@ -582,6 +602,7 @@ router.post(
           createdByUserId: actor.userId,
           createdByAgentId: actor.agentId,
           dispatchedAt: isDispatched ? new Date() : undefined,
+          metadata: { dedup_hash: dedupHash },
         });
         await manager.save(ProjectOrchestrationTask, created);
 
@@ -3475,6 +3496,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function sha256(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+// ── R18a: idempotent task dispatch (dedup on title+goal hash) ────────────────
+//
+// When the PM dispatches a task whose normalized (title, goal) matches an
+// already-active task for the same agent in the same orchestration, we reject
+// the duplicate with 409 instead of creating a second in-flight task. "Active"
+// = dispatched | running | changes_requested — once a task reaches a review or
+// terminal state the same logical task may be dispatched again (e.g. a fresh
+// iteration after the previous one was approved).
+const TASK_DEDUP_ACTIVE_STATUSES: ProjectOrchestrationTaskStatus[] = [
+  ProjectOrchestrationTaskStatus.DISPATCHED,
+  ProjectOrchestrationTaskStatus.RUNNING,
+  ProjectOrchestrationTaskStatus.CHANGES_REQUESTED,
+];
+
+/** Normalize free text for dedup: trim, lowercase, collapse whitespace runs. */
+function normalizeForDedup(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** Stable dedup hash over the normalized (title, goal) pair. Two dispatches
+ *  with the same logical title+goal produce the same hash regardless of
+ *  capitalization or incidental whitespace. */
+function computeDedupHash(title: string, goal: string): string {
+  return sha256(`${normalizeForDedup(title)}\n${normalizeForDedup(goal)}`);
 }
 
 // ── Loop status helpers (GET /v1/projects/:project_id/loop-status) ───────────
