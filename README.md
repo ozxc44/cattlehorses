@@ -12,6 +12,15 @@
 
 **不是**：又一个单 agent 编程助手（那是 Cursor / Copilot 的赛道）。这里管的是"一群 agent 怎么协作"。
 
+**与同类项目的区别**：
+
+| 项目 | 定位 | cattlehorses 的不同 |
+|------|------|-------------------|
+| LangChain / LangGraph | 构建/编排 agent 的框架 | cattlehorses 不管怎么构建 agent，管的是多个 agent **如何被调度、验证、合并、观测、恢复** |
+| AutoGen / CrewAI | 多 agent 对话/角色扮演 | cattlehorses 不做对话，做**可追踪的 changeset + PM executor 自动审核** |
+| OpenHands / SWE-agent | 单 agent autonomous coding | cattlehorses 管**多** agent 的协作，不是单个 agent 的能力 |
+| **cattlehorses** | **Agent Collaboration OS** | **可调度 + 可验证 + 可合并 + 可观测 + 可恢复** 的协作操作系统 |
+
 ## 核心能力
 
 | 能力 | 说明 |
