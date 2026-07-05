@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, master, "release/*"]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
   workflow_dispatch:
     inputs:
       api_url:
@@ -12,28 +12,77 @@ on:
         required: false
         default: ""
 
+# Cancel in-progress runs for the same branch/PR
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: zz_ci
+          POSTGRES_PASSWORD: zz_ci
+          POSTGRES_DB: zz_ci
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
       - name: Install backend dependencies
-        run: cd backend && npm ci
-      - name: Typecheck
-        run: cd backend && npm run typecheck
-      - name: Unit tests
-        run: cd backend && npm run test:unit
+        run: npm ci
+        working-directory: backend
+
+      - name: Build
+        run: npm run build
+        working-directory: backend
+
+      - name: Test
+        run: npm test
+        working-directory: backend
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: zz_ci
+          DB_PASSWORD: zz_ci
+          DB_DATABASE: zz_ci
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: backend/test-results/
+          if-no-files-found: ignore
 
   dashboard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
       - name: Dashboard JS syntax check (all dashboard/*.html)
         run: node scripts/check-dashboard-syntax.js dashboard
 
@@ -41,14 +90,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: SDK compileall + import
         run: |
           python3 -m compileall sdk/python/zz_agent
           pip install -e sdk/python/
           python3 -c "import zz_agent; print('zz_agent ok')"
+
       - name: CLI compileall + import
         run: |
           python3 -m compileall cli/zz_cli
@@ -73,15 +125,25 @@ jobs:
           - 5432:5432
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
       - name: Install backend dependencies
-        run: cd backend && npm ci
+        run: npm ci
+        working-directory: backend
+
       - name: Build backend
-        run: cd backend && npm run build
+        run: npm run build
+        working-directory: backend
+
       - name: Compile migration import check
-        run: cd backend && node scripts/ci-migration-check.js
+        run: node scripts/ci-migration-check.js
+        working-directory: backend
+
       - name: Show pending migrations
         env:
           DB_HOST: localhost
@@ -89,8 +151,10 @@ jobs:
           DB_USERNAME: zz_ci
           DB_PASSWORD: zz_ci
           DB_DATABASE: zz_ci
-          DB_SYNCHRONIZE: false
-        run: cd backend && npx typeorm migration:show -d dist/src/data-source.js
+          DB_SYNCHRONIZE: "false"
+        run: npx typeorm migration:show -d dist/src/data-source.js
+        working-directory: backend
+
       - name: Run migrations
         env:
           DB_HOST: localhost
@@ -98,45 +162,81 @@ jobs:
           DB_USERNAME: zz_ci
           DB_PASSWORD: zz_ci
           DB_DATABASE: zz_ci
-          DB_SYNCHRONIZE: false
-        run: cd backend && npx typeorm migration:run -d dist/src/data-source.js
+          DB_SYNCHRONIZE: "false"
+        run: npx typeorm migration:run -d dist/src/data-source.js
+        working-directory: backend
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: npm audit (warn only)
+        run: npm audit --audit-level=moderate || true
+        working-directory: backend
 
   e2e:
     runs-on: ubuntu-latest
     if: ${{ inputs.api_url != '' || vars.API_URL != '' }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
       - name: Install backend dependencies
-        run: cd backend && npm ci
+        run: npm ci
+        working-directory: backend
+
       - name: Build backend
-        run: cd backend && npm run build
+        run: npm run build
+        working-directory: backend
+
       - name: API E2E
         env:
           NODE_ENV: test
           API_URL: ${{ inputs.api_url || vars.API_URL }}
-        run: cd backend && node dist/tests/e2e-api.test.js
+        run: node dist/tests/e2e-api.test.js
+        working-directory: backend
 
   golden-path-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
       - name: Install backend dependencies
-        run: cd backend && npm ci
+        run: npm ci
+        working-directory: backend
+
       - name: Build backend
-        run: cd backend && npm run build
+        run: npm run build
+        working-directory: backend
+
       - name: Start backend and wait for health
         env:
           NODE_ENV: test
           PORT: ${{ vars.SMOKE_PORT || '3000' }}
           INBOX_LEASE_TTL_MS: 2000
         run: |
-          cd backend
           echo "BASE_URL=http://127.0.0.1:$PORT" >> "$GITHUB_ENV"
           echo "API_URL=http://127.0.0.1:$PORT" >> "$GITHUB_ENV"
           npm start &
@@ -152,21 +252,27 @@ jobs:
           done
           echo "ERROR: backend failed to become healthy" >&2
           exit 1
+        working-directory: backend
+
       - name: Run Golden Path orchestration smoke
         env:
-          RUN_LEASE_SMOKE: 1
-          RUN_ORCHESTRATION_SMOKE: 1
+          RUN_LEASE_SMOKE: "1"
+          RUN_ORCHESTRATION_SMOKE: "1"
         run: bash deploy/smoke.sh
+
       - name: Measure TTFT
         if: always()
         env:
-          TTFT_THRESHOLD_MS: 300000
+          TTFT_THRESHOLD_MS: "300000"
         run: bash deploy/measure-ttft.sh
+
       - name: API E2E
         if: always()
         env:
           NODE_ENV: test
-        run: cd backend && node dist/tests/e2e-api.test.js
+        run: node dist/tests/e2e-api.test.js
+        working-directory: backend
+
       - name: Stop backend
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true
