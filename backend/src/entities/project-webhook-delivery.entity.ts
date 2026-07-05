@@ -88,7 +88,7 @@ export class ProjectWebhookDelivery {
    * delivery has reached a terminal state (success / dead_letter). The
    * retry sweep selects rows where status=RETRYING AND next_retry_at <= now.
    */
-  @Column({ name: 'next_retry_at', nullable: true })
+  @Column({ name: 'next_retry_at', type: 'timestamp', nullable: true })
   nextRetryAt?: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
