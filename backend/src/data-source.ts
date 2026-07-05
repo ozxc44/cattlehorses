@@ -40,6 +40,7 @@ import {
   ProjectWebhookDelivery,
   AuditLogEntry,
   LoopAlert,
+  ScheduledDispatch,
 } from './entities';
 
 const isTestEnv = process.env.NODE_ENV === 'test';
@@ -85,6 +86,7 @@ const entities = [
   ProjectWebhookDelivery,
   AuditLogEntry,
   LoopAlert,
+  ScheduledDispatch,
 ];
 
 const migrations = [`${__dirname}/migrations/*{.ts,.js}`];
@@ -118,6 +120,10 @@ function normalizeReflectedColumnTypes(): void {
     { target: ProjectRelease, propertyName: 'publishedAt' },
     { target: ProjectSecurityAdvisory, propertyName: 'publishedAt' },
     { target: ProjectWebhookDelivery, propertyName: 'nextRetryAt' },
+    ...[ScheduledDispatch].flatMap((t) => [
+      { target: t, propertyName: 'lastRunAt' },
+      { target: t, propertyName: 'nextRunAt' },
+    ]),
   ];
 
   for (const { target, propertyName } of datePatchTargets) {

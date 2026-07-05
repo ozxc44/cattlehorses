@@ -19,8 +19,10 @@ Usage:
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -2656,6 +2658,475 @@ def health_check(
     else:
         healthy = _run_once()
         raise typer.Exit(0 if healthy else 1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PERF REPORT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+_DEFAULT_PERF_WINDOW_HOURS = 24.0
+
+
+def _parse_since(value: Optional[str]) -> Optional[datetime.datetime]:
+    """Parse a --since value into an aware UTC datetime.
+
+    Supports ISO-8601 datetimes (``2024-01-01T00:00:00Z``) and relative
+    expressions such as ``1h``, ``30m``, ``7d``.
+    Returns None for empty input.
+    """
+    if not value:
+        return None
+    value = value.strip()
+
+    # Relative expression: <number><unit>
+    match = re.match(r"^(\d+)\s*([smhdw])$", value.lower())
+    if match:
+        amount = int(match.group(1))
+        unit = match.group(2)
+        delta = datetime.timedelta(
+            seconds=amount if unit == "s" else 0,
+            minutes=amount if unit == "m" else 0,
+            hours=amount if unit == "h" else 0,
+            days=amount if unit == "d" else 0,
+            weeks=amount if unit == "w" else 0,
+        )
+        return datetime.datetime.now(datetime.timezone.utc) - delta
+
+    # ISO-8601: accept trailing Z and space separators.
+    iso = value.replace(" ", "T").replace("Z", "+00:00")
+    try:
+        parsed = datetime.datetime.fromisoformat(iso)
+    except ValueError as exc:
+        raise ValueError(f"Invalid --since value: {value}") from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(datetime.timezone.utc)
+
+
+def _format_duration(minutes: Optional[float]) -> str:
+    """Format minutes into a human-readable string."""
+    if minutes is None:
+        return "—"
+    if minutes < 1:
+        return f"{int(minutes * 60)}s"
+    if minutes < 60:
+        return f"{minutes:.1f}m"
+    return f"{minutes / 60:.1f}h"
+
+
+def _perf_report_window_hours(since: Optional[datetime.datetime]) -> float:
+    """Determine the report window in hours for rate calculations."""
+    if since is None:
+        return _DEFAULT_PERF_WINDOW_HOURS
+    now = datetime.datetime.now(datetime.timezone.utc)
+    hours = (now - since).total_seconds() / 3600.0
+    return max(hours, 1.0 / 60.0)
+
+
+def _fetch_perf_report(
+    client: Any,
+    project_id: str,
+    since: Optional[datetime.datetime],
+) -> dict[str, Any]:
+    """Fetch metrics, worker-load, and loop-status for a project.
+
+    Passes ``since`` as a query parameter when provided so backends that
+    support time-bounded metrics can honour it.
+    """
+    params: dict[str, Any] = {}
+    if since is not None:
+        params["since"] = since.isoformat()
+
+    try:
+        metrics_resp = client._request(
+            "GET", f"/v1/projects/{project_id}/metrics", params=params
+        )
+        metrics = metrics_resp.json()
+    except Exception as e:
+        _handle_error(e, "Failed to fetch metrics")
+        raise  # unreachable, _handle_error exits
+
+    try:
+        worker_load_resp = client._request(
+            "GET", f"/v1/projects/{project_id}/worker-load", params=params
+        )
+        worker_load = worker_load_resp.json()
+    except Exception as e:
+        _handle_error(e, "Failed to fetch worker load")
+        raise
+
+    try:
+        loop_status_resp = client._request(
+            "GET", f"/v1/projects/{project_id}/loop-status", params=params
+        )
+        loop_status = loop_status_resp.json()
+    except Exception as e:
+        _handle_error(e, "Failed to fetch loop status")
+        raise
+
+    # Responses may be wrapped in {data: ...}; unwrap if necessary.
+    if isinstance(metrics, dict) and "data" in metrics and len(metrics) == 1:
+        metrics = metrics["data"]
+    if isinstance(worker_load, dict) and "data" in worker_load:
+        worker_load = worker_load["data"]
+    elif not isinstance(worker_load, list):
+        worker_load = worker_load.get("data", []) if isinstance(worker_load, dict) else []
+    if isinstance(loop_status, dict) and "data" in loop_status and len(loop_status) == 1:
+        loop_status = loop_status["data"]
+
+    return {
+        "metrics": metrics if isinstance(metrics, dict) else {},
+        "worker_load": worker_load if isinstance(worker_load, list) else [],
+        "loop_status": loop_status if isinstance(loop_status, dict) else {},
+    }
+
+
+def _compute_perf_metrics(
+    data: dict[str, Any],
+    since: Optional[datetime.datetime],
+) -> dict[str, Any]:
+    """Compute throughput, reliability, and worker-efficiency metrics."""
+    metrics = data.get("metrics") or {}
+    worker_load = data.get("worker_load") or []
+    loop_status = data.get("loop_status") or {}
+
+    total_tasks = int(metrics.get("total_tasks", 0) or 0)
+    completed_tasks = int(metrics.get("completed_tasks", 0) or 0)
+    auto_merged_changesets = int(metrics.get("auto_merged_changesets", 0) or 0)
+    rejected_changesets = int(metrics.get("rejected_changesets", 0) or 0)
+    avg_task_duration_minutes = metrics.get("avg_task_duration_minutes")
+    avg_changeset_review_time_minutes = metrics.get("avg_changeset_review_time_minutes")
+
+    window_hours = _perf_report_window_hours(since)
+
+    # Throughput
+    tasks_per_hour = completed_tasks / window_hours
+    changesets_per_hour = auto_merged_changesets / window_hours
+    merges_per_hour = auto_merged_changesets / window_hours
+
+    # Reliability
+    success_rate = (completed_tasks / total_tasks * 100) if total_tasks > 0 else 0.0
+    # The aggregate metrics endpoint does not currently expose retry counts;
+    # report N/A rather than inventing a number.
+    avg_retry_count: Optional[float] = metrics.get("avg_retry_count")
+    review_time_minutes = avg_changeset_review_time_minutes
+
+    # Worker efficiency
+    active_workers = [w for w in worker_load if isinstance(w, dict)]
+    worker_count = len(active_workers)
+    tasks_per_worker = (completed_tasks / worker_count) if worker_count > 0 else 0.0
+    avg_duration_per_worker = avg_task_duration_minutes
+
+    # Per-worker efficiency, optionally filtered by --since using the last
+    # completion timestamp reported by worker-load.
+    since_iso = since.isoformat() if since else None
+    worker_rows: list[dict[str, Any]] = []
+    worker_stats_by_id: dict[str, dict[str, Any]] = {
+        (ws.get("agent_name") or ""): ws
+        for ws in metrics.get("worker_stats", [])
+        if isinstance(ws, dict)
+    }
+    for w in active_workers:
+        name = w.get("agent_name") or "—"
+        last_completed = w.get("last_task_completed_at")
+        if since_iso and last_completed and last_completed < since_iso:
+            continue
+        stats = worker_stats_by_id.get(name) or {}
+        worker_rows.append({
+            "name": name,
+            "online": bool(w.get("online", False)),
+            "health": w.get("health_status", "unknown"),
+            "running_tasks": int(w.get("running_tasks", 0) or 0),
+            "tasks_completed": int(stats.get("tasks_completed", 0) or 0),
+            "changesets_merged": int(stats.get("changesets_merged", 0) or 0),
+            "avg_duration_minutes": stats.get("avg_duration_minutes")
+                if stats.get("avg_duration_minutes") is not None
+                else avg_task_duration_minutes,
+            "utilization_score": w.get("utilization_score", 0),
+        })
+
+    return {
+        "window_hours": window_hours,
+        "since": since.isoformat() if since else None,
+        "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "summary": {
+            "total_tasks": total_tasks,
+            "completed_tasks": completed_tasks,
+            "auto_merged_changesets": auto_merged_changesets,
+            "rejected_changesets": rejected_changesets,
+            "pending_changesets": len(loop_status.get("pending_changesets", [])),
+            "running_tasks": int(loop_status.get("running_tasks", 0) or 0),
+            "stalled_tasks": len(loop_status.get("stalled_tasks", [])),
+            "worker_count": worker_count,
+        },
+        "throughput": {
+            "tasks_per_hour": tasks_per_hour,
+            "changesets_per_hour": changesets_per_hour,
+            "merges_per_hour": merges_per_hour,
+        },
+        "reliability": {
+            "success_rate": success_rate,
+            "avg_retry_count": avg_retry_count,
+            "avg_review_time_minutes": review_time_minutes,
+        },
+        "worker_efficiency": {
+            "tasks_per_worker": tasks_per_worker,
+            "avg_duration_minutes": avg_duration_per_worker,
+            "workers": worker_rows,
+        },
+        "raw": data,
+    }
+
+
+def _render_perf_report(report: dict[str, Any], project_id: str) -> None:
+    """Print a formatted performance report to the console."""
+    console.print(f"[bold]Performance Report[/bold] — project {project_id}")
+    if report.get("since"):
+        console.print(f"[dim]Since:[/dim] {report['since']}  [dim]Window:[/dim] {report['window_hours']:.2f}h")
+    else:
+        console.print(f"[dim]Window:[/dim] last {report['window_hours']:.0f}h")
+    console.print(f"[dim]Generated:[/dim] {report['generated_at']}")
+    console.print()
+
+    summary = report["summary"]
+    s_table = Table(title="Summary", title_style="bold")
+    s_table.add_column("Metric", style="bold")
+    s_table.add_column("Value", justify="right")
+    s_table.add_row("Total tasks", str(summary["total_tasks"]))
+    s_table.add_row("Completed tasks", str(summary["completed_tasks"]))
+    s_table.add_row("Merged changesets", str(summary["auto_merged_changesets"]))
+    s_table.add_row("Rejected changesets", str(summary["rejected_changesets"]))
+    s_table.add_row("Pending changesets", str(summary["pending_changesets"]))
+    s_table.add_row("Running tasks", str(summary["running_tasks"]))
+    s_table.add_row("Stalled tasks", str(summary["stalled_tasks"]))
+    s_table.add_row("Workers", str(summary["worker_count"]))
+    console.print(s_table)
+    console.print()
+
+    t = report["throughput"]
+    t_table = Table(title="Throughput", title_style="bold")
+    t_table.add_column("Metric", style="bold")
+    t_table.add_column("Rate", justify="right")
+    t_table.add_row("Tasks / hour", f"{t['tasks_per_hour']:.2f}")
+    t_table.add_row("Changesets / hour", f"{t['changesets_per_hour']:.2f}")
+    t_table.add_row("Merges / hour", f"{t['merges_per_hour']:.2f}")
+    console.print(t_table)
+    console.print()
+
+    r = report["reliability"]
+    r_table = Table(title="Reliability", title_style="bold")
+    r_table.add_column("Metric", style="bold")
+    r_table.add_column("Value", justify="right")
+    r_table.add_row("Success rate", f"{r['success_rate']:.1f}%")
+    retry_val = f"{r['avg_retry_count']:.2f}" if r["avg_retry_count"] is not None else "N/A"
+    r_table.add_row("Avg retry count", retry_val)
+    review_val = _format_duration(r["avg_review_time_minutes"])
+    r_table.add_row("Avg review time", review_val)
+    console.print(r_table)
+    console.print()
+
+    e = report["worker_efficiency"]
+    e_table = Table(title="Worker Efficiency", title_style="bold")
+    e_table.add_column("Metric", style="bold")
+    e_table.add_column("Value", justify="right")
+    e_table.add_row("Tasks / worker", f"{e['tasks_per_worker']:.2f}")
+    e_table.add_row("Avg task duration", _format_duration(e["avg_duration_minutes"]))
+    console.print(e_table)
+    console.print()
+
+    workers = e["workers"]
+    if workers:
+        w_table = Table(title="Per-Worker Breakdown", title_style="bold")
+        w_table.add_column("Worker", style="bold")
+        w_table.add_column("Online", width=6)
+        w_table.add_column("Health", width=10)
+        w_table.add_column("Running", justify="right")
+        w_table.add_column("Completed", justify="right")
+        w_table.add_column("Merged", justify="right")
+        w_table.add_column("Avg duration", justify="right")
+        w_table.add_column("Utilization", justify="right")
+        for w in workers:
+            online_str = "[green]yes[/green]" if w["online"] else "[red]no[/red]"
+            health_color = {
+                "healthy": "green",
+                "degraded": "yellow",
+                "unhealthy": "red",
+                "offline": "dim",
+            }.get(w["health"], "white")
+            w_table.add_row(
+                w["name"],
+                online_str,
+                f"[{health_color}]{w['health']}[/{health_color}]",
+                str(w["running_tasks"]),
+                str(w["tasks_completed"]),
+                str(w["changesets_merged"]),
+                _format_duration(w["avg_duration_minutes"]),
+                f"{w['utilization_score']:.0%}",
+            )
+        console.print(w_table)
+    else:
+        console.print("[dim]No worker data available.[/dim]")
+
+
+def _build_perf_report_markdown(report: dict[str, Any], project_id: str) -> str:
+    """Build the markdown report content."""
+    lines: list[str] = []
+    lines.append("# Performance Report")
+    lines.append("")
+    lines.append(f"- **Project:** `{project_id}`")
+    if report.get("since"):
+        lines.append(f"- **Since:** {report['since']}")
+        lines.append(f"- **Window:** {report['window_hours']:.2f} hours")
+    else:
+        lines.append(f"- **Window:** last {report['window_hours']:.0f} hours")
+    lines.append(f"- **Generated at:** {report['generated_at']}")
+    lines.append("")
+
+    s = report["summary"]
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Total tasks | {s['total_tasks']} |")
+    lines.append(f"| Completed tasks | {s['completed_tasks']} |")
+    lines.append(f"| Merged changesets | {s['auto_merged_changesets']} |")
+    lines.append(f"| Rejected changesets | {s['rejected_changesets']} |")
+    lines.append(f"| Pending changesets | {s['pending_changesets']} |")
+    lines.append(f"| Running tasks | {s['running_tasks']} |")
+    lines.append(f"| Stalled tasks | {s['stalled_tasks']} |")
+    lines.append(f"| Workers | {s['worker_count']} |")
+    lines.append("")
+
+    t = report["throughput"]
+    lines.append("## Throughput")
+    lines.append("")
+    lines.append("| Metric | Rate |")
+    lines.append("|--------|------|")
+    lines.append(f"| Tasks / hour | {t['tasks_per_hour']:.2f} |")
+    lines.append(f"| Changesets / hour | {t['changesets_per_hour']:.2f} |")
+    lines.append(f"| Merges / hour | {t['merges_per_hour']:.2f} |")
+    lines.append("")
+
+    r = report["reliability"]
+    lines.append("## Reliability")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Success rate | {r['success_rate']:.1f}% |")
+    retry_md = f"{r['avg_retry_count']:.2f}" if r["avg_retry_count"] is not None else "N/A"
+    lines.append(f"| Avg retry count | {retry_md} |")
+    review_md = _format_duration(r["avg_review_time_minutes"])
+    lines.append(f"| Avg review time | {review_md} |")
+    lines.append("")
+
+    e = report["worker_efficiency"]
+    lines.append("## Worker Efficiency")
+    lines.append("")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Tasks / worker | {e['tasks_per_worker']:.2f} |")
+    lines.append(f"| Avg task duration | {_format_duration(e['avg_duration_minutes'])} |")
+    lines.append("")
+
+    workers = e["workers"]
+    lines.append("### Per-Worker Breakdown")
+    lines.append("")
+    if workers:
+        lines.append("| Worker | Online | Health | Running | Completed | Merged | Avg duration | Utilization |")
+        lines.append("|--------|--------|--------|---------|-----------|--------|--------------|-------------|")
+        for w in workers:
+            util = f"{w['utilization_score']:.0%}"
+            lines.append(
+                f"| {w['name']} | {'yes' if w['online'] else 'no'} | {w['health']} | "
+                f"{w['running_tasks']} | {w['tasks_completed']} | {w['changesets_merged']} | "
+                f"{_format_duration(w['avg_duration_minutes'])} | {util} |"
+            )
+    else:
+        lines.append("No worker data available.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _save_perf_report(
+    report: dict[str, Any],
+    project_id: str,
+    output_path: Optional[str],
+) -> str:
+    """Save the report to a markdown file and return the path used."""
+    if output_path:
+        path = os.path.abspath(output_path)
+    else:
+        date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        path = os.path.abspath(os.path.join("docs", f"perf-report-{date_str}.md"))
+
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+
+    content = _build_perf_report_markdown(report, project_id)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    return path
+
+
+@app.command("perf-report")
+def perf_report(
+    project_id: Optional[str] = typer.Option(
+        None, "--project", "-p", help="Project ID"
+    ),
+    since: Optional[str] = typer.Option(
+        None,
+        "--since",
+        help="Time bound for the report. Accepts ISO-8601 datetime or relative expression (e.g. 1h, 1d, 7d).",
+    ),
+    output: Optional[str] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output markdown file path. Defaults to docs/perf-report-<date>.md.",
+    ),
+    json_out: bool = typer.Option(
+        False, "--json", help="Output machine-readable JSON instead of the table."
+    ),
+) -> None:
+    """Generate a performance report for a project.
+
+    Calls GET /metrics, GET /worker-load, and GET /loop-status, then computes
+    throughput, reliability, and worker-efficiency metrics. The report is
+    printed as a table and saved to docs/perf-report-<date>.md by default.
+    """
+    resolved_project_id = _get_project_id(project_id)
+
+    try:
+        since_dt = _parse_since(since)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    client = _get_client()
+    try:
+        data = _fetch_perf_report(client, resolved_project_id, since_dt)
+    except Exception as e:
+        _handle_error(e, "Failed to generate performance report")
+        raise
+
+    report = _compute_perf_metrics(data, since_dt)
+
+    if json_out:
+        console.print_json(json.dumps(report, default=str))
+    else:
+        _render_perf_report(report, resolved_project_id)
+
+    try:
+        saved_path = _save_perf_report(report, resolved_project_id, output)
+    except OSError as exc:
+        console.print(f"[red]Failed to save report:[/red] {exc}")
+        raise typer.Exit(1)
+
+    if not json_out:
+        console.print(f"\n[green]✓ Report saved:[/green] {saved_path}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

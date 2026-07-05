@@ -100,6 +100,9 @@ startChangesetStalenessPing();
 import { startAlertSweep } from './services/alert.service';
 startAlertSweep();
 
+import { startScheduler } from './services/scheduler.service';
+startScheduler();
+
 // ─── Middleware ──────────────────────────────────────────────────────────────
 
 app.disable('x-powered-by');

@@ -20,6 +20,7 @@ import {
   ProjectOrchestrationTask,
   ProjectOrchestrationTaskEvidence,
   ProjectOrchestrationTaskStatus,
+  ScheduledDispatch,
   Session,
   SessionParticipant,
   SessionStatus,
@@ -44,6 +45,7 @@ import {
 import { createInboxItem, upsertWorkUnit, updateWorkUnitOnReview, ackInboxItemsForTask } from './agent-inbox.routes';
 import { serializeChangeset } from './versioning.routes';
 import { eventStreamService } from '../services/event-stream.service';
+import { nextCronDate } from '../services/scheduler.service';
 
 const router = Router();
 const dispatchService = new SessionDispatchService();
@@ -4138,7 +4140,7 @@ function getAgentMaxConcurrent(agent: Agent): number {
  *
  * Returns null when no agent is eligible (caller emits 409).
  */
-async function selectBestWorker(
+export async function selectBestWorker(
   projectId: string,
   requiredCapability: string | null,
 ): Promise<{ agentId: string; agentName: string; reason: string } | null> {
@@ -4214,6 +4216,139 @@ function groupByAgentId<T>(items: T[], getAgentId: (item: T) => string | null | 
     groups[agentId] = list;
   }
   return groups;
+}
+
+// ── R30b: Scheduled Dispatch ────────────────────────────────────────────────
+
+router.post(
+  '/v1/projects/:project_id/scheduled-dispatch',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.SendMessage),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const actor = getActor(req);
+      if (!actor) {
+        res.status(401).json({ detail: 'Authentication required' });
+        return;
+      }
+
+      const title = normalizeRequiredString(req.body.title, 'title', 255);
+      const goal = normalizeRequiredString(req.body.goal, 'goal', 20_000);
+      const cronPattern = normalizeRequiredString(req.body.cron_pattern, 'cron_pattern', 64);
+
+      if (!title.ok) {
+        res.status(422).json({ detail: title.error });
+        return;
+      }
+      if (!goal.ok) {
+        res.status(422).json({ detail: goal.error });
+        return;
+      }
+      if (!cronPattern.ok) {
+        res.status(422).json({ detail: cronPattern.error });
+        return;
+      }
+
+      const nextRunAt = nextCronDate(cronPattern.value, new Date());
+      if (!nextRunAt) {
+        res.status(422).json({ detail: 'Invalid cron_pattern. Expected 5-field cron expression (minute hour day-of-month month day-of-week)' });
+        return;
+      }
+
+      const maxConcurrent = typeof req.body.max_concurrent === 'number' && req.body.max_concurrent > 0
+        ? Math.min(Math.floor(req.body.max_concurrent), 10)
+        : 1;
+
+      const workerCapability = typeof req.body.worker_capability === 'string' && req.body.worker_capability.trim()
+        ? req.body.worker_capability.trim()
+        : null;
+
+      const repo = AppDataSource.getRepository(ScheduledDispatch);
+      const schedule = repo.create({
+        id: randomUUID(),
+        projectId,
+        title: title.value,
+        goal: goal.value,
+        cronPattern: cronPattern.value,
+        workerCapability,
+        maxConcurrent,
+        enabled: true,
+        nextRunAt,
+      });
+      await repo.save(schedule);
+
+      res.status(201).json(serializeSchedule(schedule));
+    } catch (err) {
+      console.error('Create scheduled-dispatch error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+router.get(
+  '/v1/projects/:project_id/schedules',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const repo = AppDataSource.getRepository(ScheduledDispatch);
+      const schedules = await repo.find({
+        where: { projectId },
+        order: { createdAt: 'DESC' },
+      });
+      res.json({ data: schedules.map(serializeSchedule) });
+    } catch (err) {
+      console.error('List schedules error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+router.delete(
+  '/v1/projects/:project_id/schedules/:schedule_id',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.SendMessage),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const scheduleId = req.params.schedule_id;
+      const repo = AppDataSource.getRepository(ScheduledDispatch);
+      const schedule = await repo.findOne({
+        where: { id: scheduleId, projectId },
+      });
+      if (!schedule) {
+        res.status(404).json({ detail: 'Schedule not found' });
+        return;
+      }
+      await repo.remove(schedule);
+      res.status(204).send();
+    } catch (err) {
+      console.error('Delete schedule error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+function serializeSchedule(schedule: ScheduledDispatch): Record<string, unknown> {
+  return {
+    id: schedule.id,
+    project_id: schedule.projectId,
+    title: schedule.title,
+    goal: schedule.goal,
+    cron_pattern: schedule.cronPattern,
+    worker_capability: schedule.workerCapability ?? null,
+    max_concurrent: schedule.maxConcurrent,
+    enabled: schedule.enabled,
+    last_run_at: schedule.lastRunAt?.toISOString() ?? null,
+    next_run_at: schedule.nextRunAt?.toISOString() ?? null,
+    created_at: schedule.createdAt.toISOString(),
+    updated_at: schedule.updatedAt.toISOString(),
+  };
 }
 
 export default router;
