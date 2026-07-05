@@ -119,6 +119,105 @@ export async function authenticateJwtOrAgentApiKey(req: Request, res: Response, 
 }
 
 /**
+ * Verify a JWT access token. Returns the decoded payload, or null when the
+ * token is malformed, expired, or signed with the wrong secret.
+ *
+ * Shared by the Express auth middleware and the WebSocket handshake (which
+ * cannot go through Express middleware because the upgrade event bypasses it).
+ */
+export function verifyAccessToken(token: string): AuthPayload | null {
+  try {
+    return jwt.verify(token, JWT_SECRET) as AuthPayload;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve an agent API key (`zzk_…`) to its owning agent.
+ *
+ * Shared by the Express API-key middleware and the WebSocket handshake so the
+ * prefix-scoped bcrypt lookup lives in exactly one place. Returns the agent
+ * identity, or null when the key is unknown / malformed / revoked.
+ *
+ * NOTE: this does not touch the agent's heartbeat. Callers that represent a
+ * live agent request (the HTTP middleware) bump `lastHeartbeatAt` themselves;
+ * transport-only callers (the WS handshake) must not, since opening a socket
+ * is not agent activity.
+ */
+export async function resolveAgentByApiKey(
+  apiKey: string,
+): Promise<{ id: string; projectId: string; name: string } | null> {
+  if (!apiKey || !apiKey.startsWith('zzk_') || apiKey.length < 20) {
+    return null;
+  }
+
+  const bcrypt = await import('bcryptjs');
+  const { AppDataSource } = await import('../data-source');
+  const { Agent, AgentStatus, AgentLifecycleStatus } = await import('../entities/agent.entity');
+  const { Not, IsNull, In } = await import('typeorm');
+  const agentRepo = AppDataSource.getRepository(Agent);
+  const apiKeyPrefix = apiKey.substring(0, 8);
+
+  // Primary path: query only prefix-matching, non-revoked, active agents.
+  // This avoids loading all agents and eliminates bcrypt work against
+  // unrelated prefix rows.
+  let candidates = await agentRepo.find({
+    where: {
+      apiKeyPrefix,
+      apiKeyHash: Not(IsNull()),
+      status: Not(AgentStatus.INACTIVE),
+      lifecycleStatus: Not(In([AgentLifecycleStatus.RETIRED, AgentLifecycleStatus.SUPERSEDED])),
+    },
+    select: ['id', 'projectId', 'name', 'apiKeyHash'],
+  });
+
+  let matched: InstanceType<typeof Agent> | null = null;
+
+  for (const agent of candidates) {
+    if (!agent.apiKeyHash) continue;
+    if (await bcrypt.compare(apiKey, agent.apiKeyHash)) {
+      matched = agent;
+      break;
+    }
+  }
+
+  // Legacy fallback: only when primary finds no match, check rows that
+  // predate the dedicated api_key_prefix column (apiKeyPrefix IS NULL).
+  // These still use configJson.api_key_prefix for prefix matching.
+  if (!matched) {
+    const legacyCandidates = await agentRepo.find({
+      where: {
+        apiKeyPrefix: IsNull(),
+        apiKeyHash: Not(IsNull()),
+        status: Not(AgentStatus.INACTIVE),
+        lifecycleStatus: Not(In([AgentLifecycleStatus.RETIRED, AgentLifecycleStatus.SUPERSEDED])),
+      },
+      select: ['id', 'projectId', 'name', 'apiKeyHash', 'configJson'],
+    });
+
+    for (const agent of legacyCandidates) {
+      if (!agent.apiKeyHash) continue;
+      const config = (agent as any).configJson || {};
+      const storedPrefix = typeof config.api_key_prefix === 'string' ? config.api_key_prefix : null;
+      if (storedPrefix && storedPrefix !== apiKeyPrefix) {
+        continue;
+      }
+      if (await bcrypt.compare(apiKey, agent.apiKeyHash)) {
+        matched = agent;
+        break;
+      }
+    }
+  }
+
+  if (!matched) {
+    return null;
+  }
+
+  return { id: matched.id, projectId: matched.projectId, name: matched.name };
+}
+
+/**
  * Authenticate agent via API key.
  * Accepts `Authorization: Bearer zzk_xxx` or `X-API-Key: zzk_xxx`.
  * Verifies the key against stored bcrypt hash, sets req.agent.
@@ -137,70 +236,9 @@ export async function authenticateAgentApiKey(req: Request, res: Response, next:
     res.status(401).json({ detail: 'Missing API key. Provide X-API-Key header or Authorization: Bearer <key>' });
     return;
   }
-  if (!apiKey.startsWith('zzk_') || apiKey.length < 20) {
-    res.status(401).json({ detail: 'Invalid API key' });
-    return;
-  }
 
   try {
-    const bcrypt = await import('bcryptjs');
-    const { AppDataSource } = await import('../data-source');
-    const { Agent, AgentStatus, AgentLifecycleStatus } = await import('../entities/agent.entity');
-    const { Not, IsNull, In } = await import('typeorm');
-    const agentRepo = AppDataSource.getRepository(Agent);
-    const apiKeyPrefix = apiKey.substring(0, 8);
-
-    // Primary path: query only prefix-matching, non-revoked, active agents.
-    // This avoids loading all agents and eliminates bcrypt work against
-    // unrelated prefix rows.
-    let candidates = await agentRepo.find({
-      where: {
-        apiKeyPrefix,
-        apiKeyHash: Not(IsNull()),
-        status: Not(AgentStatus.INACTIVE),
-        lifecycleStatus: Not(In([AgentLifecycleStatus.RETIRED, AgentLifecycleStatus.SUPERSEDED])),
-      },
-      select: ['id', 'projectId', 'name', 'apiKeyHash'],
-    });
-
-    let matched: InstanceType<typeof Agent> | null = null;
-
-    for (const agent of candidates) {
-      if (!agent.apiKeyHash) continue;
-      if (await bcrypt.compare(apiKey, agent.apiKeyHash)) {
-        matched = agent;
-        break;
-      }
-    }
-
-    // Legacy fallback: only when primary finds no match, check rows that
-    // predate the dedicated api_key_prefix column (apiKeyPrefix IS NULL).
-    // These still use configJson.api_key_prefix for prefix matching.
-    if (!matched) {
-      const legacyCandidates = await agentRepo.find({
-        where: {
-          apiKeyPrefix: IsNull(),
-          apiKeyHash: Not(IsNull()),
-          status: Not(AgentStatus.INACTIVE),
-          lifecycleStatus: Not(In([AgentLifecycleStatus.RETIRED, AgentLifecycleStatus.SUPERSEDED])),
-        },
-        select: ['id', 'projectId', 'name', 'apiKeyHash', 'configJson'],
-      });
-
-      for (const agent of legacyCandidates) {
-        if (!agent.apiKeyHash) continue;
-        const config = (agent as any).configJson || {};
-        const storedPrefix = typeof config.api_key_prefix === 'string' ? config.api_key_prefix : null;
-        if (storedPrefix && storedPrefix !== apiKeyPrefix) {
-          continue;
-        }
-        if (await bcrypt.compare(apiKey, agent.apiKeyHash)) {
-          matched = agent;
-          break;
-        }
-      }
-    }
-
+    const matched = await resolveAgentByApiKey(apiKey);
     if (!matched) {
       res.status(401).json({ detail: 'Invalid API key' });
       return;
@@ -208,8 +246,10 @@ export async function authenticateAgentApiKey(req: Request, res: Response, next:
 
     req.agent = { id: matched.id, projectId: matched.projectId, name: matched.name };
 
-    // Update last heartbeat
-    await agentRepo.update(matched.id, { lastHeartbeatAt: new Date() });
+    // Update last heartbeat — this route represents live agent activity.
+    const { AppDataSource } = await import('../data-source');
+    const { Agent } = await import('../entities/agent.entity');
+    await AppDataSource.getRepository(Agent).update(matched.id, { lastHeartbeatAt: new Date() });
 
     next();
   } catch (err) {

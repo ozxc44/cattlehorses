@@ -37,6 +37,16 @@ interface Subscriber {
 }
 
 /**
+ * A project-scoped realtime subscriber (e.g. a /ws/loop WebSocket). Unlike the
+ * session-scoped SSE Subscriber above, this is a plain delivery callback rather
+ * than an Express Response, so it works equally well over WebSocket frames.
+ * Filtering by event type is the caller's responsibility.
+ */
+export interface ProjectSubscriber {
+  send: (envelope: EventEnvelope) => void;
+}
+
+/**
  * EventStreamService manages all active SSE connections.
  *
  * - `subscribe(sessionId, res)` — registers a new SSE subscriber
@@ -48,6 +58,11 @@ export class EventStreamService {
   private subscribers: Map<string, Subscriber[]> = new Map();
   private eventStore: Map<string, EventEnvelope[]> = new Map();
   private seqCounters: Map<string, number> = new Map();
+  // Project-scoped realtime subscribers (WebSocket /ws/loop clients), keyed by
+  // projectId. Fan-out is driven by each envelope's projectId, so a loop
+  // subscriber sees every event published for its project regardless of which
+  // session the event was emitted under.
+  private projectSubscribers: Map<string, Set<ProjectSubscriber>> = new Map();
   private readonly HEARTBEAT_INTERVAL_MS = 30000;
   private readonly MAX_EVENTS_PER_SESSION = 10000;
 
@@ -144,6 +159,9 @@ export class EventStreamService {
       this.sendSSEEvent(sub.res, envelope);
     }
 
+    // Fan out to project-scoped realtime subscribers (e.g. /ws/loop).
+    this.broadcastToProject(envelope);
+
     // Trigger webhook delivery (fire-and-forget)
     webhookService.sendWebhook(event.projectId, envelope).catch((err) => {
       console.error('[event-stream] Webhook trigger error:', err);
@@ -180,6 +198,30 @@ export class EventStreamService {
     return eventToEnvelope(event);
   }
 
+  /**
+   * Subscribe a project-scoped realtime listener (e.g. a /ws/loop WebSocket).
+   * Returns an unsubscribe function. The caller owns type filtering — every
+   * envelope published for this projectId is forwarded to `subscriber.send`.
+   */
+  subscribeProject(projectId: string, subscriber: ProjectSubscriber): () => void {
+    const subs = this.projectSubscribers.get(projectId) || new Set<ProjectSubscriber>();
+    subs.add(subscriber);
+    this.projectSubscribers.set(projectId, subs);
+
+    return () => {
+      this.removeProjectSubscriber(projectId, subscriber);
+    };
+  }
+
+  private removeProjectSubscriber(projectId: string, subscriber: ProjectSubscriber): void {
+    const subs = this.projectSubscribers.get(projectId);
+    if (!subs) return;
+    subs.delete(subscriber);
+    if (subs.size === 0) {
+      this.projectSubscribers.delete(projectId);
+    }
+  }
+
   private storeEnvelope(envelope: EventEnvelope): void {
     const storedEvents = this.eventStore.get(envelope.sessionId) || [];
     const existingIndex = storedEvents.findIndex((item) => item.id === envelope.id);
@@ -201,6 +243,22 @@ export class EventStreamService {
     const subs = this.subscribers.get(envelope.sessionId) || [];
     for (const sub of subs) {
       this.sendSSEEvent(sub.res, envelope);
+    }
+    // Fan out to project-scoped realtime subscribers (e.g. /ws/loop).
+    this.broadcastToProject(envelope);
+  }
+
+  private broadcastToProject(envelope: EventEnvelope): void {
+    const subs = this.projectSubscribers.get(envelope.projectId);
+    if (!subs || subs.size === 0) return;
+    for (const sub of subs) {
+      try {
+        sub.send(envelope);
+      } catch (err) {
+        // Delivery callback threw (likely a dead socket) — drop silently; the
+        // WS layer cleans up via its own close/error handlers.
+        console.error('[event-stream] Project subscriber delivery error:', err);
+      }
     }
   }
 

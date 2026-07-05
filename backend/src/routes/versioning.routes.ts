@@ -4,6 +4,7 @@ import { EntityManager, In, IsNull } from 'typeorm';
 import { AppDataSource } from '../data-source';
 import { authenticateJwtOrAgentApiKey, extractProjectId } from '../middleware/auth';
 import { requirePermission, Permission, Role } from '../middleware/rbac';
+import { rateLimitChangesets } from '../middleware/rate-limit.middleware';
 import { upsertProjectFileContent, softDeleteProjectFile } from '../services/project-file.service';
 import {
   Agent,
@@ -1020,6 +1021,7 @@ router.get(
 
 router.post(
   '/v1/projects/:project_id/changesets',
+  rateLimitChangesets,
   authenticateJwtOrAgentApiKey,
   extractProjectId,
   requirePermission(Permission.SendMessage),

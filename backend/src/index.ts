@@ -11,6 +11,7 @@ import { AppDataSource } from './data-source';
 import { Agent } from './entities/agent.entity';
 import { getAgentPresence } from './services/agent-presence.service';
 import { log as logger } from './services/logger';
+import { attachRealtimeWebSocket } from './routes/realtime.routes';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const DEV_JWT_SECRET = 'dev-jwt-secret-change-in-production';
@@ -98,6 +99,9 @@ async function main() {
   }
 
   const server = http.createServer(app);
+
+  // Attach the /ws/loop real-time WebSocket endpoint (snapshot + delta push).
+  attachRealtimeWebSocket(server);
 
   server.listen(PORT, () => {
     logger.info('Server started', { port: PORT, health: `http://localhost:${PORT}/v1/health` });

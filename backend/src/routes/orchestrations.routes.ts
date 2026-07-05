@@ -3794,7 +3794,7 @@ function latestOf(...dates: Array<Date | null | undefined>): Date | null {
  *   blocked   = blocked | failed (needs intervention)
  *   completed = completed | cancelled (terminal)
  */
-async function buildLoopStatus(projectId: string) {
+export async function buildLoopStatus(projectId: string) {
   const now = Date.now();
   const stallCutoff = new Date(now - loopStallMs());
 
