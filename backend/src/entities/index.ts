@@ -53,5 +53,4 @@ export { ProjectChangesetMergeStatus } from './project-changeset.entity';
 export { ProjectChangesetPostMergeStatus } from './project-changeset.entity';
 export { AuditLogEntry, type AuditActorType } from './audit-log-entry.entity';
 export { LoopAlert } from './loop-alert.entity';
-export { ScheduledDispatch } from './scheduled-dispatch.entity';
 export { AgentHeartbeatLog } from './agent-heartbeat-log.entity';

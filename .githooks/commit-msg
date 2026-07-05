@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Git hook: validate commit message follows conventional-commits format.
+# Install: git config core.hooksPath .githooks
+
+VALID_TYPES="feat|fix|docs|style|refactor|perf|test|chore|ci|build"
+PATTERN="^(${VALID_TYPES})(\(.+\))?!?: .+"
+
+MSG_FILE="$1"
+MSG=$(head -1 "$MSG_FILE")
+
+if [[ ! "$MSG" =~ $PATTERN ]]; then
+  echo "ERROR: Commit message does not follow Conventional Commits format."
+  echo "  Got:      $MSG"
+  echo "  Expected: type(scope): description"
+  echo "  Types:    feat, fix, docs, style, refactor, perf, test, chore, ci, build"
+  exit 1
+fi

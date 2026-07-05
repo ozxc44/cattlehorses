@@ -40,7 +40,6 @@ import {
   ProjectWebhookDelivery,
   AuditLogEntry,
   LoopAlert,
-  ScheduledDispatch,
   AgentHeartbeatLog,
 } from './entities';
 
@@ -87,7 +86,6 @@ const entities = [
   ProjectWebhookDelivery,
   AuditLogEntry,
   LoopAlert,
-  ScheduledDispatch,
   AgentHeartbeatLog,
 ];
 
@@ -121,11 +119,6 @@ function normalizeReflectedColumnTypes(): void {
     ]),
     { target: ProjectRelease, propertyName: 'publishedAt' },
     { target: ProjectSecurityAdvisory, propertyName: 'publishedAt' },
-    { target: ProjectWebhookDelivery, propertyName: 'nextRetryAt' },
-    ...[ScheduledDispatch].flatMap((t) => [
-      { target: t, propertyName: 'lastRunAt' },
-      { target: t, propertyName: 'nextRunAt' },
-    ]),
   ];
 
   for (const { target, propertyName } of datePatchTargets) {
