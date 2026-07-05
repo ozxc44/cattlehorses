@@ -71,3 +71,6 @@ deploy/onboarding-smoke-artifacts/
 deploy/dashboard-multiworker-e2e-artifacts/
 backend/load-proof-artifacts/
 deploy/nas/data/
+node_modules/ws/
+/package.json
+/package-lock.json
