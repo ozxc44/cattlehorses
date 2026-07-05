@@ -1816,115 +1816,6 @@ router.patch(
 );
 
 /**
- * POST /v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/cancel
- * Main agent (PM) cancels an in-flight task. Records who/when/why on
- * metadata.cancellation (surfaced via serializeTask as `cancelled_at` +
- * `cancellation`), notifies the assigned worker via a durable task_cancelled
- * inbox item, and acks any stale task_dispatched notification so the worker
- * can't later claim a dead task (ghost-notification guard). Terminal-status
- * tasks (approved/cancelled/failed) are refused with 409.
- * Body: { reason?: "..." }
- * RBAC: project-level main agent OR orchestration main agent (ensureMainAgentOrUser).
- */
-router.post(
-  '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/cancel',
-  authenticateJwtOrAgentApiKey,
-  extractProjectId,
-  requirePermission(Permission.SendMessage),
-  async (req: Request, res: Response) => {
-    try {
-      const actor = getActor(req);
-      if (!actor) {
-        res.status(401).json({ detail: 'Authentication required' });
-        return;
-      }
-      const task = await loadTask(req.params.project_id, req.params.orchestration_id, req.params.task_id);
-      if (!task) {
-        res.status(404).json({ detail: 'Task not found' });
-        return;
-      }
-      if (!await ensureMainAgentOrUser(req, res, task.orchestration)) return;
-
-      // Terminal tasks cannot be cancelled — the work is already settled.
-      if (TERMINAL_TASK_STATUSES.includes(task.status)) {
-        res.status(409).json({
-          detail: `Task is in a terminal status (${task.status}) and cannot be cancelled`,
-        });
-        return;
-      }
-
-      const reason = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 20_000) : '';
-      const cancelledAt = new Date();
-      const previousStatus = task.status;
-
-      task.status = ProjectOrchestrationTaskStatus.CANCELLED;
-      const metadata = (task.metadata && typeof task.metadata === 'object')
-        ? { ...(task.metadata as Record<string, unknown>) }
-        : {};
-      metadata.cancellation = {
-        cancelled_at: cancelledAt.toISOString(),
-        cancelled_by: actor.actorId,
-        cancelled_by_type: actor.agentId ? 'agent' : 'user',
-        reason,
-      };
-      task.metadata = metadata;
-
-      const updated = await AppDataSource.transaction(async (manager) => {
-        await manager.save(ProjectOrchestrationTask, task);
-        await refreshTaskLedger(manager, task.orchestration, actor.actorId);
-        return task;
-      });
-
-      // Notify the assigned worker that the task is dead, and clear the original
-      // task_dispatched notification so it can't be claimed after the fact.
-      if (updated.assignedAgentId) {
-        await ackInboxItemsForTask(updated.assignedAgentId, updated.id).catch((e: any) =>
-          console.error('Failed to ack worker inbox on cancel:', e));
-        await createInboxItem({
-          projectId: updated.projectId,
-          recipientAgentId: updated.assignedAgentId,
-          eventType: 'task_cancelled',
-          title: `Task cancelled: ${updated.title}`,
-          body: `Task ID: ${updated.id}${reason ? ` (reason: ${reason})` : ''}. No further action needed from you on this task.`,
-          orchestrationId: updated.orchestrationId,
-          taskId: updated.id,
-        }).catch((e: any) => console.error('Failed to notify worker of cancellation:', e));
-      }
-
-      publishTaskStatusChanged(
-        updated.orchestration.sessionId,
-        updated.projectId,
-        updated,
-        previousStatus,
-      );
-
-      try {
-        if (updated.orchestration.sessionId) {
-          eventStreamService.publish(updated.orchestration.sessionId, {
-            projectId: updated.projectId,
-            sessionId: updated.orchestration.sessionId,
-            agentId: req.agent?.id ?? undefined,
-            type: 'task_cancelled',
-            payload: {
-              taskId: updated.id,
-              agentId: req.agent?.id ?? undefined,
-              status: updated.status,
-            },
-          });
-        }
-      } catch (streamErr) {
-        console.warn('Failed to publish task_cancelled event:', streamErr);
-      }
-
-      res.status(200).json(serializeTask(updated));
-    } catch (err) {
-      console.error('Cancel orchestration task error:', err);
-      res.status(500).json({ detail: 'Internal server error' });
-    }
-  },
-);
-
-/**
  * POST /v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/reassign
  * Main agent redirects a stalled task to a different worker. Cancels the old
  * task and creates a fresh one (same goal/acceptance criteria) assigned to the
@@ -2117,6 +2008,109 @@ router.post(
       res.status(201).json(serializeTask(result));
     } catch (err) {
       console.error('Reassign task error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+/**
+ * POST /v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/cancel
+ * Main agent cancels a task. Marks it CANCELLED, records who/when/why in
+ * metadata.cancellation, acks the worker's stale task_dispatched notification
+ * (the "ghost notification" guard — a worker must not be able to claim a dead
+ * task), and creates a task_cancelled inbox item so the worker learns the task
+ * is dead. Terminal tasks (approved / already cancelled) → 409.
+ * Body: { reason?: "..." }
+ * RBAC: project-level main agent OR orchestration main agent (ensureMainAgentOrUser).
+ */
+router.post(
+  '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/cancel',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.SendMessage),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const orchestrationId = req.params.orchestration_id;
+      const taskId = req.params.task_id;
+      const reason = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 1000) : null;
+
+      const task = await loadTask(projectId, orchestrationId, taskId);
+      if (!task) {
+        res.status(404).json({ detail: 'Task not found' });
+        return;
+      }
+      if (!await ensureMainAgentOrUser(req, res, task.orchestration)) return;
+
+      // Cannot cancel a task that is already in a terminal status.
+      if (task.status === ProjectOrchestrationTaskStatus.APPROVED ||
+          task.status === ProjectOrchestrationTaskStatus.CANCELLED) {
+        res.status(409).json({ detail: `Cannot cancel a task in terminal status ${task.status}` });
+        return;
+      }
+
+      const actor = getActor(req);
+      if (!actor) {
+        res.status(401).json({ detail: 'Authentication required' });
+        return;
+      }
+      const cancelledBy = actor.agentId ?? actor.userId;
+      const cancelledAtIso = new Date().toISOString();
+      const previousStatus = task.status;
+      const orchestration = task.orchestration;
+
+      task.status = ProjectOrchestrationTaskStatus.CANCELLED;
+      task.metadata = {
+        ...(task.metadata || {}),
+        cancellation: {
+          cancelled_at: cancelledAtIso,
+          cancelled_by: cancelledBy,
+          reason,
+        },
+      };
+      await AppDataSource.getRepository(ProjectOrchestrationTask).save(task);
+
+      // Notify the assigned worker: clear the stale dispatch first (so they
+      // cannot claim a dead task), then post a cancellation notice.
+      if (task.assignedAgentId) {
+        await ackInboxItemsForTask(task.assignedAgentId, task.id).catch((e: any) =>
+          console.error('Failed to ack worker inbox on cancel:', e));
+        await createInboxItem({
+          projectId,
+          recipientAgentId: task.assignedAgentId,
+          eventType: 'task_cancelled',
+          title: `Task cancelled: ${task.title}`,
+          body: `Task ${task.id} was cancelled${reason ? ` (reason: ${reason})` : ''}. No further action needed from you on this task.`,
+          orchestrationId,
+          taskId: task.id,
+        }).catch((e: any) => console.error('Failed to notify worker of cancellation:', e));
+      }
+
+      publishTaskStatusChanged(orchestration.sessionId, projectId, task, previousStatus);
+
+      try {
+        if (orchestration.sessionId) {
+          eventStreamService.publish(orchestration.sessionId, {
+            projectId,
+            sessionId: orchestration.sessionId,
+            agentId: task.assignedAgentId ?? undefined,
+            type: 'task_cancelled',
+            payload: {
+              taskId: task.id,
+              agentId: task.assignedAgentId ?? undefined,
+              status: task.status,
+              cancelled_by: cancelledBy,
+              reason,
+            },
+          });
+        }
+      } catch (streamErr) {
+        console.warn('Failed to publish task_cancelled event:', streamErr);
+      }
+
+      res.status(200).json(serializeTask(task));
+    } catch (err) {
+      console.error('Cancel task error:', err);
       res.status(500).json({ detail: 'Internal server error' });
     }
   },
@@ -3000,33 +2994,21 @@ function serializeOrchestration(orchestration: ProjectOrchestration, tasks?: Pro
   };
 }
 
-function readTaskCancellation(task: ProjectOrchestrationTask): {
-  cancelled_at: string;
-  cancelled_by: string;
-  reason: string;
-} | null {
-  const cancellation = task.metadata
-    ? (task.metadata as Record<string, unknown>).cancellation as
-        | { cancelled_at?: string; cancelled_by?: string; reason?: string }
-        | undefined
-    : undefined;
-  if (!cancellation || typeof cancellation.cancelled_at !== 'string') return null;
-  return {
-    cancelled_at: cancellation.cancelled_at,
-    cancelled_by: typeof cancellation.cancelled_by === 'string' ? cancellation.cancelled_by : '',
-    reason: typeof cancellation.reason === 'string' ? cancellation.reason : '',
-  };
-}
-
 function serializeTask(task: ProjectOrchestrationTask) {
-  const artifacts = task.metadata
-    ? (task.metadata as Record<string, unknown>).md_artifacts as Record<string, string> | undefined
+  const metadata = (task.metadata || null) as Record<string, any> | null;
+  const artifacts = metadata
+    ? metadata.md_artifacts as Record<string, string> | undefined
     : undefined;
-  // Cancellation is persisted on metadata.cancellation (set by the cancel
-  // endpoint) rather than a dedicated column; surface its timestamp + structured
-  // payload on the serialized task so callers can tell when/why/by whom a task
-  // was cancelled.
-  const cancellation = readTaskCancellation(task);
+  // Cancellation audit trail (who/when/why) is persisted on metadata.cancellation
+  // by the cancel endpoint; surface it as a first-class field plus a flat
+  // cancelled_at timestamp for API consumers.
+  const cancellation = metadata
+    ? metadata.cancellation as {
+        cancelled_at?: string;
+        cancelled_by?: string | null;
+        reason?: string | null;
+      } | undefined
+    : undefined;
   return {
     id: task.id,
     project_id: task.projectId,
@@ -3058,7 +3040,7 @@ function serializeTask(task: ProjectOrchestrationTask) {
     completed_at: task.completedAt ?? null,
     reviewed_at: task.reviewedAt ?? null,
     cancelled_at: cancellation?.cancelled_at ?? null,
-    cancellation,
+    cancellation: cancellation ?? null,
     created_at: task.createdAt,
     updated_at: task.updatedAt,
     md_artifacts: artifacts ?? null,
@@ -3873,13 +3855,6 @@ const TASK_DEDUP_ACTIVE_STATUSES: ProjectOrchestrationTaskStatus[] = [
   ProjectOrchestrationTaskStatus.DISPATCHED,
   ProjectOrchestrationTaskStatus.RUNNING,
   ProjectOrchestrationTaskStatus.CHANGES_REQUESTED,
-];
-
-/** Terminal task statuses — once reached the task can no longer be cancelled. */
-const TERMINAL_TASK_STATUSES: ProjectOrchestrationTaskStatus[] = [
-  ProjectOrchestrationTaskStatus.APPROVED,
-  ProjectOrchestrationTaskStatus.CANCELLED,
-  ProjectOrchestrationTaskStatus.FAILED,
 ];
 
 /** Normalize free text for dedup: trim, lowercase, collapse whitespace runs. */

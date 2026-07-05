@@ -13,6 +13,7 @@ Usage:
     zz health --project <id>
     zz doctor --project <id>
     zz config-check [--project-dir <dir>] [--handler <cmd>] [--base-url <url>]
+    zz dispatch --project <id> --orchestration <id> --title <title> --goal <goal> [--agent <id> | --smart] [--wait]
     zz dev fake-agent
     zz dev quickstart-runtime
 """
@@ -4880,6 +4881,148 @@ def orchestrations_complete(
 
     console.print(f"[green]✓ Orchestration completed:[/green] {orch.id}")
     console.print(f"  Status: {orch.status}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  DISPATCH
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _print_dispatched_task(task: Any) -> None:
+    console.print(f"[green]✓ Task dispatched:[/green] {task.id}")
+    console.print(f"  Title: {task.title}")
+    console.print(f"  Status: {task.status}")
+    if getattr(task, "assigned_agent_id", None):
+        console.print(f"  Assigned: {task.assigned_agent_id}")
+
+
+def _wait_for_task(
+    client: Any,
+    *,
+    project_id: str,
+    orchestration_id: str,
+    task_id: str,
+    timeout: int,
+    poll_interval: int,
+) -> None:
+    """Poll a task until it reaches a terminal or reviewable state."""
+    console.print(f"[dim]Waiting for task {task_id} to be ready for review...[/dim]")
+    terminal_statuses = {
+        "ready_for_review",
+        "approved",
+        "changes_requested",
+        "failed",
+        "blocked",
+        "cancelled",
+    }
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        task = client.orchestrations.get_task(
+            project_id=project_id,
+            orchestration_id=orchestration_id,
+            task_id=task_id,
+        )
+        if task.status in terminal_statuses:
+            status_color = {
+                "ready_for_review": "cyan",
+                "approved": "green",
+                "changes_requested": "red",
+                "failed": "red",
+                "blocked": "red",
+                "cancelled": "dim",
+            }.get(task.status, "white")
+            console.print(f"[{status_color}]Task {task_id} is {task.status}[/{status_color}]")
+            return
+        time.sleep(poll_interval)
+    console.print(f"[red]Timeout waiting for task {task_id} after {timeout}s[/red]")
+    raise typer.Exit(1)
+
+
+@app.command("dispatch")
+def dispatch_cmd(
+    project_id: str = typer.Option(..., "--project", "-p", help="Project ID"),
+    orchestration_id: str = typer.Option(
+        ..., "--orchestration", "-o", help="Orchestration ID"
+    ),
+    title: str = typer.Option(..., "--title", "-t", help="Task title"),
+    goal: str = typer.Option(..., "--goal", "-g", help="Task goal"),
+    assigned_agent_id: Optional[str] = typer.Option(
+        None,
+        "--agent",
+        "-a",
+        help="Assigned worker agent ID (required unless --smart is used)",
+    ),
+    capability: Optional[str] = typer.Option(
+        None,
+        "--capability",
+        "-c",
+        help="Required worker capability (used with --smart)",
+    ),
+    smart: bool = typer.Option(
+        False, "--smart", help="Auto-select the best available worker"
+    ),
+    wait: bool = typer.Option(
+        False, "--wait", help="Poll until the task reaches ready_for_review or a terminal state"
+    ),
+    timeout: int = typer.Option(
+        300, "--timeout", help="Maximum seconds to wait with --wait"
+    ),
+    poll_interval: int = typer.Option(
+        5, "--poll-interval", help="Seconds between status polls with --wait"
+    ),
+) -> None:
+    """Dispatch a task to a worker, with optional smart auto-selection."""
+    if not smart and not assigned_agent_id:
+        console.print("[red]--agent is required unless --smart is used[/red]")
+        raise typer.Exit(1)
+
+    client = _get_client()
+    try:
+        if smart:
+            body: dict[str, Any] = {"title": title, "goal": goal}
+            if capability:
+                body["required_capability"] = capability
+            response = client._request(
+                "POST",
+                f"/v1/projects/{project_id}/orchestrations/{orchestration_id}/tasks/smart-dispatch",
+                json=body,
+            )
+            data = response.json()
+            task_id = data.get("task_id") or data.get("id")
+            assigned = data.get("assigned_agent_id")
+            task = client.orchestrations.get_task(
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                task_id=task_id,
+            )
+            if assigned and not task.assigned_agent_id:
+                # Some test mocks may not echo the assignee on the task object.
+                task.assigned_agent_id = assigned
+        else:
+            task = client.orchestrations.create_task(
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                title=title,
+                goal=goal,
+                assigned_agent_id=assigned_agent_id,
+                dispatch=True,
+            )
+
+        _print_dispatched_task(task)
+
+        if wait:
+            _wait_for_task(
+                client,
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                task_id=task.id,
+                timeout=timeout,
+                poll_interval=poll_interval,
+            )
+    except Exception as e:
+        if isinstance(e, typer.Exit):
+            raise
+        _handle_error(e, "Failed to dispatch task")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

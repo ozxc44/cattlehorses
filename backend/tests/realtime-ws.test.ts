@@ -77,14 +77,26 @@ async function waitForServer(baseUrl: string, retries = 50, delayMs = 100): Prom
 }
 
 /**
- * Open a WebSocket with retries. CI runners can drop or delay the initial
- * upgrade handshake; on any error/close-before-open we back off and try again
- * instead of failing the whole suite.
+ * Open a WebSocket with retries AND collect the first inbound message.
+ *
+ * The message listener is attached synchronously right after the socket is
+ * constructed — BEFORE the upgrade handshake completes — so the loop-status
+ * snapshot (which the server pushes as soon as `buildLoopStatus` resolves, very
+ * fast on in-memory SQLite) can never arrive before a listener exists. CI
+ * runners can also drop or delay the initial upgrade, so the connect is retried
+ * with backoff; on each fresh attempt a brand-new socket + listener is wired.
  */
-async function connectWithRetry(url: string, retries = 5, delayMs = 500): Promise<WebSocket> {
+async function connectAndFirstMessage(
+  url: string,
+  retries = 5,
+  delayMs = 500,
+  firstMessageMs = 10000,
+): Promise<{ ws: WebSocket; firstMessage: any }> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < retries; attempt++) {
     const ws = new WebSocket(url);
+    // Attach the message listener up-front so the snapshot can't be missed.
+    const firstMessageP = nextMessage(ws, firstMessageMs);
     try {
       await new Promise<void>((resolve, reject) => {
         ws.once('open', () => resolve());
@@ -92,7 +104,8 @@ async function connectWithRetry(url: string, retries = 5, delayMs = 500): Promis
         ws.once('unexpected-response', (_req: any, res: any) =>
           reject(new Error(`unexpected upgrade response ${res?.statusCode}`)));
       });
-      return ws; // opened cleanly
+      const firstMessage = await firstMessageP;
+      return { ws, firstMessage };
     } catch (err) {
       lastErr = err;
       try { ws.close(); } catch { /* already closed */ }
@@ -152,9 +165,9 @@ async function main(): Promise<void> {
 
     // ── 1. Authenticated connect → loop-status snapshot ──────────────────
     console.log('\n── Test 1: authenticated connect yields loop-status snapshot ──');
-    const ws = await connectWithRetry(`${wsBase}/ws/loop?project_id=${projectId}&token=${token}`);
-
-    const snapshot = await nextMessage(ws);
+    const { ws, firstMessage: snapshot } = await connectAndFirstMessage(
+      `${wsBase}/ws/loop?project_id=${projectId}&token=${token}`,
+    );
     check('snapshot frame type', snapshot.type, 'loop-status');
     check('snapshot has workers array', Array.isArray(snapshot.payload?.workers), true);
     check('snapshot has pending_changesets array', Array.isArray(snapshot.payload?.pending_changesets), true);
