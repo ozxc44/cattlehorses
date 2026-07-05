@@ -9,6 +9,8 @@ import { Session, SessionStatus } from '../entities/session.entity';
 import { SessionParticipant } from '../entities/session-participant.entity';
 import { Message, MessageRole } from '../entities/message.entity';
 import { Incident } from '../entities/incident.entity';
+import { ProjectOrchestrationTask, ProjectOrchestrationTaskStatus } from '../entities/project-orchestration-task.entity';
+import { ProjectChangeset, ProjectChangesetStatus } from '../entities/project-changeset.entity';
 import { eventStreamService } from '../services/event-stream.service';
 import { eventRepository } from '../services/event-repository.service';
 import { healthMonitorService } from '../services/health-monitor.service';
@@ -540,6 +542,153 @@ router.patch(
       res.json({ capabilities: updated });
     } catch (err) {
       console.error('Patch agent capabilities error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  }
+);
+
+const EXTENSION_CAPABILITY_MAP: Record<string, string> = {
+  '.ts': 'backend',
+  '.tsx': 'frontend',
+  '.js': 'backend',
+  '.jsx': 'frontend',
+  '.py': 'python',
+  '.md': 'docs',
+  '.yaml': 'config',
+  '.yml': 'config',
+  '.json': 'config',
+  '.toml': 'config',
+  '.html': 'frontend',
+  '.css': 'frontend',
+  '.vue': 'frontend',
+  '.go': 'backend',
+  '.rs': 'backend',
+  '.java': 'backend',
+  '.sql': 'database',
+  '.sh': 'devops',
+  '.dockerfile': 'devops',
+  '.tf': 'devops',
+};
+
+function inferCapabilitiesFromExtensions(filePaths: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const fp of filePaths) {
+    const ext = fp.includes('.') ? '.' + fp.split('.').pop()!.toLowerCase() : '';
+    const cap = EXTENSION_CAPABILITY_MAP[ext];
+    if (cap) {
+      counts.set(cap, (counts.get(cap) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function buildConfidence(count: number, total: number): number {
+  if (total === 0) return 0;
+  return Math.round((count / total) * 100) / 100;
+}
+
+/**
+ * POST /v1/agents/:aid/detect-capabilities
+ * Auto-detect capabilities from the agent's completed task history and changeset
+ * file operations. Returns suggested capabilities with confidence scores.
+ * Auth: user JWT or agent API key.
+ */
+router.post(
+  '/v1/agents/:aid/detect-capabilities',
+  authenticateJwtOrAgentApiKey,
+  attachAgentProject,
+  async (req: Request, res: Response) => {
+    try {
+      if (req.agent && req.agent.id !== req.params.aid) {
+        res.status(403).json({ detail: 'Agent token cannot detect capabilities for another agent' });
+        return;
+      }
+
+      const agent = (req as any).loadedAgent as Agent;
+      const taskRepo = AppDataSource.getRepository(ProjectOrchestrationTask);
+      const changesetRepo = AppDataSource.getRepository(ProjectChangeset);
+
+      const completedTasks = await taskRepo.find({
+        where: {
+          assignedAgentId: agent.id,
+          status: ProjectOrchestrationTaskStatus.APPROVED,
+        },
+      });
+
+      const mergedChangesets = await changesetRepo.find({
+        where: {
+          createdByAgentId: agent.id,
+          status: ProjectChangesetStatus.MERGED,
+        },
+      });
+
+      const filePaths: string[] = [];
+      for (const cs of mergedChangesets) {
+        if (Array.isArray(cs.fileOps)) {
+          for (const op of cs.fileOps) {
+            if (op.path) filePaths.push(op.path);
+          }
+        }
+      }
+
+      const extensionCounts = inferCapabilitiesFromExtensions(filePaths);
+      const totalFiles = filePaths.length;
+
+      const taskTypeCounts = new Map<string, number>();
+      for (const task of completedTasks) {
+        const goal = (task.goal || task.title || '').toLowerCase();
+        if (goal.includes('test') || goal.includes('spec')) {
+          taskTypeCounts.set('testing', (taskTypeCounts.get('testing') ?? 0) + 1);
+        }
+        if (goal.includes('doc') || goal.includes('readme') || goal.includes('write')) {
+          taskTypeCounts.set('docs', (taskTypeCounts.get('docs') ?? 0) + 1);
+        }
+        if (goal.includes('deploy') || goal.includes('ci') || goal.includes('infra')) {
+          taskTypeCounts.set('devops', (taskTypeCounts.get('devops') ?? 0) + 1);
+        }
+        if (goal.includes('review') || goal.includes('audit')) {
+          taskTypeCounts.set('review', (taskTypeCounts.get('review') ?? 0) + 1);
+        }
+        if (goal.includes('fix') || goal.includes('bug')) {
+          taskTypeCounts.set('bugfix', (taskTypeCounts.get('bugfix') ?? 0) + 1);
+        }
+        if (goal.includes('design') || goal.includes('architect')) {
+          taskTypeCounts.set('design', (taskTypeCounts.get('design') ?? 0) + 1);
+        }
+      }
+      const totalTasks = completedTasks.length;
+
+      const allCapabilities = new Set<string>([...extensionCounts.keys(), ...taskTypeCounts.keys()]);
+      const suggested = [...allCapabilities].map((cap) => {
+        const fileCount = extensionCounts.get(cap) ?? 0;
+        const taskCount = taskTypeCounts.get(cap) ?? 0;
+        const fileConfidence = buildConfidence(fileCount, totalFiles);
+        const taskConfidence = buildConfidence(taskCount, totalTasks);
+        const combined = Math.round(((fileConfidence + taskConfidence) / 2) * 100) / 100;
+        return {
+          capability: cap,
+          confidence: combined,
+          evidence: {
+            files_modified: fileCount,
+            tasks_completed: taskCount,
+          },
+        };
+      });
+
+      suggested.sort((a, b) => b.confidence - a.confidence);
+
+      res.json({
+        agent_id: agent.id,
+        current_capabilities: normalizeCapabilities(agent.capabilities),
+        suggested_capabilities: suggested,
+        analysis: {
+          total_completed_tasks: totalTasks,
+          total_merged_changesets: mergedChangesets.length,
+          total_files_analyzed: totalFiles,
+        },
+      });
+    } catch (err) {
+      console.error('Detect capabilities error:', err);
       res.status(500).json({ detail: 'Internal server error' });
     }
   }

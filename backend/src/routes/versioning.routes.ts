@@ -3068,6 +3068,158 @@ function parsePaginationInt(value: unknown, min: number, max: number, defaultVal
   return n;
 }
 
+// ── Unified diff (LCS-based, no external dep) ───────────────────────────────
+// R28a: changeset diff preview. Computes a line-level unified diff between two
+// strings via a longest-common-subsequence DP over lines, then groups the
+// resulting edits into git-style hunks with surrounding context. Pure and
+// dependency-free so it runs in the request path without extra cost.
+const UNIFIED_DIFF_CONTEXT = 3;
+
+type DiffEdit = { type: 'context' | 'add' | 'del'; line: string };
+
+// Build the LCS edit script between two line arrays. Runs the DP table from the
+// tail so we can greedily walk from the head and emit context/add/del edits.
+function buildLcsEdits(oldLines: string[], newLines: string[]): DiffEdit[] {
+  const m = oldLines.length;
+  const n = newLines.length;
+  // dp[i][j] = length of the LCS of oldLines[i..] and newLines[j..].
+  const dp: Uint32Array[] = new Array(m + 1);
+  dp[m] = new Uint32Array(n + 1);
+  for (let i = m - 1; i >= 0; i--) {
+    const cur = new Uint32Array(n + 1);
+    const next = dp[i + 1];
+    const oldLine = oldLines[i];
+    for (let j = n - 1; j >= 0; j--) {
+      if (oldLine === newLines[j]) cur[j] = next[j + 1] + 1;
+      else cur[j] = next[j] >= cur[j + 1] ? next[j] : cur[j + 1];
+    }
+    dp[i] = cur;
+  }
+
+  const edits: DiffEdit[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (oldLines[i] === newLines[j]) {
+      edits.push({ type: 'context', line: oldLines[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      edits.push({ type: 'del', line: oldLines[i] });
+      i++;
+    } else {
+      edits.push({ type: 'add', line: newLines[j] });
+      j++;
+    }
+  }
+  while (i < m) {
+    edits.push({ type: 'del', line: oldLines[i] });
+    i++;
+  }
+  while (j < n) {
+    edits.push({ type: 'add', line: newLines[j] });
+    j++;
+  }
+  return edits;
+}
+
+// Compute a unified diff plus added/removed line counts. Empty content is
+// treated as zero lines, so brand-new files are all-additions and deletes are
+// all-removals. Identical inputs produce an empty diff string.
+function computeUnifiedDiff(oldContent: string, newContent: string): {
+  diff: string;
+  linesAdded: number;
+  linesRemoved: number;
+} {
+  const oldLines = oldContent === '' ? [] : oldContent.split('\n');
+  const newLines = newContent === '' ? [] : newContent.split('\n');
+  const edits = buildLcsEdits(oldLines, newLines);
+
+  let linesAdded = 0;
+  let linesRemoved = 0;
+  for (const edit of edits) {
+    if (edit.type === 'add') linesAdded++;
+    else if (edit.type === 'del') linesRemoved++;
+  }
+
+  // Group edits into hunks: each hunk is a change run plus up to CONTEXT lines
+  // of surrounding context. Two changes whose context windows overlap (a gap of
+  // <= 2*CONTEXT context lines) merge into one hunk.
+  const hunks: string[] = [];
+  const total = edits.length;
+  let pos = 0;
+  while (pos < total) {
+    while (pos < total && edits[pos].type === 'context') pos++;
+    if (pos >= total) break;
+
+    const start = Math.max(0, pos - UNIFIED_DIFF_CONTEXT);
+
+    let lastChange = pos;
+    let scan = pos;
+    while (scan < total) {
+      if (edits[scan].type !== 'context') {
+        lastChange = scan;
+        scan++;
+        continue;
+      }
+      let gap = 0;
+      while (scan < total && edits[scan].type === 'context') {
+        gap++;
+        scan++;
+      }
+      if (scan < total && gap <= 2 * UNIFIED_DIFF_CONTEXT) continue; // merge into this hunk
+      break;
+    }
+    const end = Math.min(total, lastChange + 1 + UNIFIED_DIFF_CONTEXT);
+
+    // Anchor the @@ header by counting old/new lines consumed before the hunk.
+    let oldBefore = 0;
+    let newBefore = 0;
+    for (let p = 0; p < start; p++) {
+      if (edits[p].type !== 'add') oldBefore++;
+      if (edits[p].type !== 'del') newBefore++;
+    }
+
+    let oldCount = 0;
+    let newCount = 0;
+    let oldStart = -1;
+    let newStart = -1;
+    const body: string[] = [];
+    for (let p = start; p < end; p++) {
+      const edit = edits[p];
+      if (edit.type === 'context') {
+        if (oldStart === -1) oldStart = oldBefore + 1;
+        if (newStart === -1) newStart = newBefore + 1;
+        oldCount++;
+        oldBefore++;
+        newCount++;
+        newBefore++;
+        body.push(` ${edit.line}`);
+      } else if (edit.type === 'del') {
+        if (oldStart === -1) oldStart = oldBefore + 1;
+        oldCount++;
+        oldBefore++;
+        body.push(`-${edit.line}`);
+      } else {
+        if (newStart === -1) newStart = newBefore + 1;
+        newCount++;
+        newBefore++;
+        body.push(`+${edit.line}`);
+      }
+    }
+    // Pure-addition / pure-removal hunks have no anchor line on one side; point
+    // at the insertion/deletion position instead (0 when at the top of the file).
+    if (oldStart === -1) oldStart = oldBefore;
+    if (newStart === -1) newStart = newBefore;
+
+    hunks.push(`@@ -${oldStart},${oldCount} +${newStart},${newCount} @@\n${body.join('\n')}`);
+
+    pos = end;
+  }
+
+  return { diff: hunks.join('\n'), linesAdded, linesRemoved };
+}
+
 type FileDiff = {
   op: 'upsert' | 'delete' | 'rename';
   path: string;
@@ -3077,6 +3229,14 @@ type FileDiff = {
   old_revision_id: string | null;
   new_revision_id: string | null;
   content_type: string | null;
+  // ── R28a: unified-diff preview ──────────────────────────────────────────
+  // A line-level unified diff (LCS-based, no external dep) of
+  // old_content → new_content, plus added/removed line counts. New files are
+  // all-additions (lines_removed=0); deletes are all-removals (lines_added=0).
+  diff: string;
+  lines_added: number;
+  lines_removed: number;
+  total_changes: number;
 };
 
 async function buildFileDiffs(
@@ -3084,10 +3244,23 @@ async function buildFileDiffs(
   fileOps: ProjectChangesetFileOp[],
 ): Promise<FileDiff[]> {
   const diffs: FileDiff[] = [];
+  const push = (entry: Omit<FileDiff, 'diff' | 'lines_added' | 'lines_removed' | 'total_changes'>) => {
+    const { diff, linesAdded, linesRemoved } = computeUnifiedDiff(
+      entry.old_content ?? '',
+      entry.new_content ?? '',
+    );
+    diffs.push({
+      ...entry,
+      diff,
+      lines_added: linesAdded,
+      lines_removed: linesRemoved,
+      total_changes: linesAdded + linesRemoved,
+    });
+  };
   for (const op of fileOps) {
     if (op.op === 'upsert') {
       const base = await readBaseContent(projectId, op.path, op.base_revision_id ?? null);
-      diffs.push({
+      push({
         op: 'upsert',
         path: op.path,
         old_path: null,
@@ -3099,7 +3272,7 @@ async function buildFileDiffs(
       });
     } else if (op.op === 'delete') {
       const base = await readBaseContent(projectId, op.path, op.base_revision_id ?? null);
-      diffs.push({
+      push({
         op: 'delete',
         path: op.path,
         old_path: null,
@@ -3115,7 +3288,7 @@ async function buildFileDiffs(
       const toFile = await AppDataSource.getRepository(ProjectFile).findOne({
         where: { projectId, path: toPath, deletedAt: IsNull() },
       });
-      diffs.push({
+      push({
         op: 'rename',
         path: toPath,
         old_path: op.path,

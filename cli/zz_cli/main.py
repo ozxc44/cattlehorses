@@ -12,6 +12,7 @@ Usage:
     zz stream --session <id>
     zz health --project <id>
     zz doctor --project <id>
+    zz config-check [--project-dir <dir>] [--handler <cmd>] [--base-url <url>]
     zz dev fake-agent
     zz dev quickstart-runtime
 """
@@ -2244,6 +2245,226 @@ def doctor(
     console.print(
         "[green]Overall: healthy[/green]" if overall_ok else "[yellow]Overall: degraded[/yellow]"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  CONFIG-CHECK
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _config_check_project_dir(project_dir: Optional[str]) -> tuple[bool, str, str]:
+    """Validate ZZ_PROJECT_DIR exists and is a git repository."""
+    path = project_dir or os.environ.get("ZZ_PROJECT_DIR")
+    if not path:
+        return False, "ZZ_PROJECT_DIR not set", "export ZZ_PROJECT_DIR=/path/to/your/project"
+    if not os.path.isdir(path):
+        return False, f"directory does not exist: {path}", "Create the directory or set ZZ_PROJECT_DIR to a valid path"
+    try:
+        proc = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--git-dir"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        git_dir = proc.stdout.strip()
+        return True, f"git repository ({git_dir})", ""
+    except subprocess.CalledProcessError:
+        return False, f"not a git repository: {path}", f"cd {path} && git init"
+    except FileNotFoundError:
+        return False, "git command not found", "Install git and ensure it is on PATH"
+    except Exception as e:
+        return False, str(e), "Check git and directory permissions"
+
+
+def _config_check_handler_cmd(handler_override: Optional[str]) -> Optional[str]:
+    """Resolve the configured handler command from options, env, or config."""
+    if handler_override:
+        return handler_override
+    for env_var in ("HANDLER_CMD", "ZZ_HANDLER"):
+        value = os.environ.get(env_var, "").strip()
+        if value:
+            return value
+    config = _load_config()
+    value = config.get("handler", "").strip()
+    if value:
+        return value
+    return None
+
+
+def _config_check_first_binary(handler_cmd: str) -> Optional[str]:
+    """Extract the first executable token from a shell command."""
+    try:
+        parts = shlex.split(handler_cmd)
+    except Exception:
+        parts = handler_cmd.split()
+    for part in parts:
+        # skip leading environment assignments like FOO=bar
+        if "=" in part and not part.startswith("-") and shutil.which(part) is None:
+            continue
+        return part
+    return None
+
+
+def _config_check_handler(handler_override: Optional[str]) -> tuple[bool, str, str]:
+    """Validate that the worker handler binary is available on PATH."""
+    handler_cmd = _config_check_handler_cmd(handler_override)
+    if handler_cmd:
+        binary = _config_check_first_binary(handler_cmd)
+        if not binary:
+            return False, f"could not parse handler command: {handler_cmd}", "Check the handler command syntax"
+        if os.path.isabs(binary):
+            if os.path.isfile(binary) and os.access(binary, os.X_OK):
+                return True, f"handler found: {binary}", ""
+            return False, f"handler not executable: {binary}", "Check file permissions or reinstall the handler"
+        if shutil.which(binary):
+            return True, f"handler on PATH: {binary}", ""
+        return False, f"handler not on PATH: {binary}", f"Install {binary} or add its directory to PATH"
+
+    # No explicit handler: accept any known local model CLI as a reasonable default.
+    common_handlers = ["kimi", "mimo", "codex", "claude", "hermes", "opencode"]
+    for name in common_handlers:
+        path = shutil.which(name)
+        if path:
+            return True, f"no explicit handler; found {name} on PATH ({path})", ""
+    return (
+        False,
+        "no handler configured and no known model CLI found on PATH",
+        "Set HANDLER_CMD, ZZ_HANDLER, or config.handler, or install kimi/mimo/codex/claude/hermes/opencode",
+    )
+
+
+def _config_check_executor_path() -> Optional[str]:
+    """Locate the local executor.py used by the worker."""
+    try:
+        import zz_cli.executor as _executor_mod
+
+        return os.path.abspath(_executor_mod.__file__)
+    except Exception:
+        # Fallback to the sibling executor.py next to this module.
+        sibling = os.path.join(os.path.dirname(os.path.abspath(__file__)), "executor.py")
+        if os.path.isfile(sibling):
+            return sibling
+        return None
+
+
+def _config_check_executor_up_to_date(
+    base_url: str, api_key: Optional[str]
+) -> tuple[bool, str, str]:
+    """Compare the local executor.py SHA256 with the platform bootstrap endpoint."""
+    executor_path = _config_check_executor_path()
+    if not executor_path:
+        return False, "local executor.py not found", "Reinstall the zz CLI or download executor.py from the platform"
+    try:
+        import hashlib
+
+        with open(executor_path, "rb") as f:
+            local_sha = hashlib.sha256(f.read()).hexdigest()
+    except Exception as e:
+        return False, f"could not hash local executor.py: {e}", "Check file permissions"
+
+    try:
+        status, data = _doctor_http_json(
+            "GET", base_url, "/v1/agent/bootstrap/executor.py.sha256", api_key=api_key
+        )
+    except Exception as e:
+        return False, f"could not fetch remote SHA: {_doctor_redact(e)}", "Check platform connectivity and API key"
+
+    if not (200 <= status < 300):
+        detail = data.get("detail", data) if isinstance(data, dict) else data
+        return False, f"bootstrap endpoint returned HTTP {status}", "Check platform version supports /v1/agent/bootstrap/executor.py.sha256"
+
+    remote_sha = str(data).strip().split()[0] if data else ""
+    if not remote_sha:
+        return False, "remote SHA empty", "Platform bootstrap endpoint returned empty hash"
+
+    if local_sha == remote_sha:
+        return True, f"up-to-date ({local_sha[:12]})", ""
+    return (
+        False,
+        f"local {local_sha[:12]} != remote {remote_sha[:12]}",
+        f"Run `zz agent executor --once` or download {base_url}/v1/agent/bootstrap/executor.py",
+    )
+
+
+def _config_check_api_key(base_url: str, api_key: Optional[str]) -> tuple[bool, str, str]:
+    """Validate the agent API key with a heartbeat POST."""
+    if not api_key:
+        return False, "no agent credential found", "Set ZZ_AGENT_KEY or run zz login / zz agents register"
+    ok, detail, _agent_id = _doctor_check_heartbeat(base_url, api_key)
+    if ok:
+        return True, f"heartbeat accepted ({detail})", ""
+    return False, detail, "Verify ZZ_AGENT_KEY is valid and not revoked"
+
+
+@app.command("config-check")
+def config_check(
+    project_dir: Optional[str] = typer.Option(
+        None, "--project-dir", "-d", help="Project directory override (defaults to ZZ_PROJECT_DIR)"
+    ),
+    handler: Optional[str] = typer.Option(
+        None, "--handler", "-H", help="Handler command override"
+    ),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Platform base URL"),
+) -> None:
+    """Validate the local worker setup and print a pass/fail checklist.
+
+    Checks:
+      * ZZ_PROJECT_DIR exists and is a git repository
+      * handler binary is available on PATH
+      * executor.py matches the platform bootstrap hash
+      * agent API key is valid (heartbeat)
+      * platform is reachable (health endpoint)
+
+    Exits with code 0 when all checks pass, otherwise exits with code 1.
+    """
+    resolved_base_url = (base_url or _get_base_url()).rstrip("/")
+    agent_key = _doctor_agent_key()
+
+    checks: list[tuple[str, bool, str, str]] = []
+
+    project_ok, project_detail, project_hint = _config_check_project_dir(project_dir)
+    checks.append(("Project directory (ZZ_PROJECT_DIR)", project_ok, project_detail, project_hint))
+
+    handler_ok, handler_detail, handler_hint = _config_check_handler(handler)
+    checks.append(("Handler binary on PATH", handler_ok, handler_detail, handler_hint))
+
+    executor_ok, executor_detail, executor_hint = _config_check_executor_up_to_date(
+        resolved_base_url, agent_key
+    )
+    checks.append(("executor.py up-to-date", executor_ok, executor_detail, executor_hint))
+
+    api_key_ok, api_key_detail, api_key_hint = _config_check_api_key(resolved_base_url, agent_key)
+    checks.append(("API key valid", api_key_ok, api_key_detail, api_key_hint))
+
+    platform_ok, platform_detail = _doctor_check_platform(resolved_base_url)
+    checks.append(("Platform reachable", platform_ok, platform_detail, ""))
+
+    overall_ok = all(ok for _name, ok, _detail, _hint in checks)
+
+    console.print("[bold]zz config-check[/bold]")
+    console.print(f"  Base URL: {resolved_base_url}")
+    console.print()
+
+    table = Table(title="Worker Setup Checklist", title_style="bold")
+    table.add_column("Check", no_wrap=True)
+    table.add_column("Result", width=8)
+    table.add_column("Detail", overflow="fold")
+    table.add_column("Remediation", overflow="fold")
+    for name, ok, detail, hint in checks:
+        table.add_row(
+            name,
+            "[green]✓[/green]" if ok else "[red]✗[/red]",
+            _doctor_redact(detail),
+            f"[yellow]{hint}[/yellow]" if hint and not ok else "",
+        )
+    console.print(table)
+    console.print()
+    if overall_ok:
+        console.print("[green]Overall: all checks passed[/green]")
+    else:
+        console.print("[red]Overall: one or more checks failed[/red]")
+        raise typer.Exit(1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
