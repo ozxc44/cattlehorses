@@ -135,6 +135,9 @@ export class ProjectOrchestrationTask {
   @Column({ name: 'reviewed_at', nullable: true })
   reviewedAt?: Date;
 
+  @Column({ name: 'cancelled_at', nullable: true })
+  cancelledAt?: Date;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 

@@ -1477,6 +1477,57 @@ router.get('/v1/users/me/agents', authenticate, async (req: Request, res: Respon
 });
 
 /**
+ * POST /v1/agents/:aid/recover
+ * Reset a worker's health to the "legacy/unknown" baseline so it becomes
+ * dispatchable again without waiting for the next smoke test.
+ *
+ * Actions:
+ *   1. healthStatus → null (legacy — dispatch allowed)
+ *   2. healthLastError → null
+ *   3. healthCheckedAt → now
+ *   4. lastHeartbeatAt → now (test heartbeat on behalf of the agent)
+ *   5. returns the updated agent (serialized)
+ *
+ * Auth: user JWT (main agent / PM / admin).
+ */
+router.post(
+  '/v1/agents/:aid/recover',
+  authenticate,
+  attachAgentProject,
+  requirePermission(Permission.EditAgent),
+  async (req: Request, res: Response) => {
+    try {
+      const agent = (req as any).loadedAgent as Agent;
+      const now = new Date();
+
+      agent.healthStatus = null;
+      agent.healthLastError = null;
+      agent.healthCheckedAt = now;
+      agent.lastHeartbeatAt = now;
+
+      await agentRepo.save(agent);
+
+      eventStreamService.publish(agent.id, {
+        sessionId: agent.id,
+        projectId: agent.projectId,
+        agentId: agent.id,
+        userId: req.user!.userId,
+        type: 'agent.recovered',
+        payload: {
+          recovered_by: req.user!.userId,
+          recovered_at: now.toISOString(),
+        },
+      });
+
+      res.json(serializeAgent(agent));
+    } catch (err) {
+      console.error('Recover agent error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  }
+);
+
+/**
  * POST /v1/agents/:aid/retire
  * Retire or supersede an agent. Retired/superseded agents are no longer
  * dispatchable or selectable but retain audit history.

@@ -117,6 +117,7 @@ function normalizeReflectedColumnTypes(): void {
     ]),
     { target: ProjectRelease, propertyName: 'publishedAt' },
     { target: ProjectSecurityAdvisory, propertyName: 'publishedAt' },
+    { target: ProjectWebhookDelivery, propertyName: 'nextRetryAt' },
   ];
 
   for (const { target, propertyName } of datePatchTargets) {

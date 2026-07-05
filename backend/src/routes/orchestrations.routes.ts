@@ -2014,6 +2014,122 @@ router.post(
 );
 
 /**
+ * POST /v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/cancel
+ *
+ * Cancel a task that has not yet reached a terminal status. Allowed from
+ * dispatched, running, pending, changes_requested, and blocked. Not allowed
+ * from terminal statuses (approved, cancelled).
+ *
+ * Body: { reason?: "..." }
+ * Auth: main agent or JWT user.
+ * 200 → updated task
+ * 409 when task is already terminal
+ */
+router.post(
+  '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/cancel',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.SendMessage),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const orchestrationId = req.params.orchestration_id;
+      const taskId = req.params.task_id;
+      const actor = getActor(req);
+      if (!actor) {
+        res.status(401).json({ detail: 'Authentication required' });
+        return;
+      }
+
+      const task = await loadTask(projectId, orchestrationId, taskId);
+      if (!task) {
+        res.status(404).json({ detail: 'Task not found' });
+        return;
+      }
+      if (!await ensureMainAgentOrUser(req, res, task.orchestration)) return;
+
+      const reason = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 2000) : null;
+      const cancellableStatuses = [
+        ProjectOrchestrationTaskStatus.PENDING,
+        ProjectOrchestrationTaskStatus.DISPATCHED,
+        ProjectOrchestrationTaskStatus.RUNNING,
+        ProjectOrchestrationTaskStatus.CHANGES_REQUESTED,
+        ProjectOrchestrationTaskStatus.BLOCKED,
+      ];
+
+      if (!cancellableStatuses.includes(task.status)) {
+        res.status(409).json({ detail: `Task cannot be cancelled from status ${task.status}` });
+        return;
+      }
+
+      const previousStatus = task.status;
+      const cancelledAt = new Date();
+      task.status = ProjectOrchestrationTaskStatus.CANCELLED;
+      task.cancelledAt = cancelledAt;
+      task.metadata = {
+        ...(task.metadata ?? {}),
+        cancellation: {
+          reason,
+          cancelled_at: cancelledAt.toISOString(),
+          cancelled_by_agent_id: actor.agentId,
+          cancelled_by_user_id: actor.userId,
+        },
+      };
+
+      const updated = await AppDataSource.transaction(async (manager) => {
+        await manager.save(ProjectOrchestrationTask, task);
+        await refreshTaskLedger(manager, task.orchestration, actor.actorId);
+        return task;
+      });
+
+      // Durable inbox: notify the assigned worker that the task was cancelled.
+      if (updated.assignedAgentId) {
+        await createInboxItem({
+          projectId,
+          recipientAgentId: updated.assignedAgentId,
+          eventType: 'task_cancelled',
+          title: `Task cancelled: ${updated.title}`,
+          body: [
+            `Task ID: ${updated.id}`,
+            reason ? `Reason: ${reason}` : '',
+            '',
+            'No further action is needed on this task.',
+          ].filter(Boolean).join('\n'),
+          orchestrationId,
+          taskId: updated.id,
+        }).catch((e: any) => console.error('Failed to notify worker of task cancellation:', e));
+      }
+
+      publishTaskStatusChanged(updated.orchestration.sessionId, projectId, updated, previousStatus);
+
+      try {
+        if (updated.orchestration.sessionId) {
+          eventStreamService.publish(updated.orchestration.sessionId, {
+            projectId,
+            sessionId: updated.orchestration.sessionId,
+            agentId: req.agent?.id ?? updated.assignedAgentId ?? undefined,
+            type: 'task_cancelled',
+            payload: {
+              taskId: updated.id,
+              agentId: req.agent?.id ?? updated.assignedAgentId ?? undefined,
+              status: updated.status,
+              reason,
+            },
+          });
+        }
+      } catch (streamErr) {
+        console.warn('Failed to publish task_cancelled event:', streamErr);
+      }
+
+      res.json(serializeTask(updated));
+    } catch (err) {
+      console.error('Cancel orchestration task error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+/**
  * PATCH /v1/projects/:project_id/orchestrations/:orchestration_id/main-agent
  * Switch the main agent for an orchestration.
  * Validates the new main agent is in the project, active, and dispatchable.
@@ -2925,6 +3041,7 @@ function serializeTask(task: ProjectOrchestrationTask) {
     claimed_at: task.claimedAt ?? null,
     completed_at: task.completedAt ?? null,
     reviewed_at: task.reviewedAt ?? null,
+    cancelled_at: task.cancelledAt ?? null,
     created_at: task.createdAt,
     updated_at: task.updatedAt,
     md_artifacts: artifacts ?? null,
@@ -2960,6 +3077,7 @@ function serializeTaskLedgerItem(task: ProjectOrchestrationTask) {
     claimed_at: task.claimedAt ?? null,
     completed_at: task.completedAt ?? null,
     reviewed_at: task.reviewedAt ?? null,
+    cancelled_at: task.cancelledAt ?? null,
     md_artifacts: artifacts ?? null,
   };
 }
