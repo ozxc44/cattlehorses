@@ -1812,6 +1812,67 @@ router.post(
   },
 );
 
+// ── Conflict Resolution Endpoint (R32b) ─────────────────────────────────────
+// GET-like: POST without resolutions body → returns 3-way merge view.
+// POST with {resolutions: [{path, content}]} → applies resolutions and updates changeset.
+router.post(
+  '/v1/projects/:project_id/changesets/:changeset_id/resolve-conflict',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.SendMessage),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = getActor(req);
+      if (!actor) {
+        res.status(401).json({ detail: 'Authentication required' });
+        return;
+      }
+      const projectId = req.params.project_id;
+      const changesetId = req.params.changeset_id;
+
+      const result = await AppDataSource.transaction(async (manager) => {
+        const changeset = await manager.findOne(ProjectChangeset, {
+          where: { id: changesetId, projectId },
+        });
+        if (!changeset) return { missing: true as const };
+        if (!isChangesetCreator(changeset, actor) && !isOwnerOrAdmin(req)) {
+          return { forbidden: true as const };
+        }
+        const isConflict = changeset.status === ProjectChangesetStatus.CONFLICT;
+        const isStale = await hasStaleFileOps(manager, projectId, changeset.fileOps);
+        if (!isConflict && !isStale) {
+          return { notConflictOrStale: true as const, changeset };
+        }
+
+        const resolutions = req.body?.resolutions;
+        if (!Array.isArray(resolutions)) {
+          return buildThreeWayMergeView(manager, projectId, changeset);
+        }
+
+        return applyResolutions(manager, projectId, changeset, resolutions, actor);
+      });
+
+      if ('missing' in result) {
+        res.status(404).json({ detail: 'Changeset not found' });
+        return;
+      }
+      if ('forbidden' in result) {
+        res.status(403).json({ detail: 'Only the creator or project owner/admin can resolve conflicts' });
+        return;
+      }
+      if ('notConflictOrStale' in result) {
+        res.status(409).json({ detail: 'Changeset is not in conflict or stale state' });
+        return;
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error('Resolve conflict error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
 router.post(
   '/v1/projects/:project_id/rollback',
   authenticateJwtOrAgentApiKey,
@@ -4238,6 +4299,232 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function sha256(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+async function hasStaleFileOps(
+  manager: EntityManager,
+  projectId: string,
+  fileOps: ProjectChangesetFileOp[],
+): Promise<boolean> {
+  for (const op of fileOps) {
+    if (!op.base_revision_id) continue;
+    const current = await manager.findOne(ProjectFile, {
+      where: { projectId, path: op.path, deletedAt: IsNull() },
+    });
+    if (current && current.currentRevisionId !== op.base_revision_id) return true;
+    if (!current) {
+      const revision = await manager.findOne(ProjectFileRevision, {
+        where: { id: op.base_revision_id, projectId, path: op.path },
+      });
+      if (!revision) return true;
+    }
+  }
+  return false;
+}
+
+type ThreeWayMergeEntry = {
+  path: string;
+  base: string | null;
+  head: string | null;
+  proposed: string | null;
+  merge_suggestion: string | null;
+  conflict: boolean;
+};
+
+async function buildThreeWayMergeView(
+  manager: EntityManager,
+  projectId: string,
+  changeset: ProjectChangeset,
+): Promise<{ changeset: ReturnType<typeof serializeChangeset>; files: ThreeWayMergeEntry[] }> {
+  const branch = await manager.findOne(ProjectBranch, { where: { id: changeset.branchId, projectId } });
+  const currentCommitId = branch?.headCommitId ?? null;
+
+  const files: ThreeWayMergeEntry[] = [];
+  for (const op of changeset.fileOps) {
+    if (op.op === 'delete') {
+      const baseContent = await resolveBaseContentForOp(manager, projectId, op);
+      const headFile = await manager.findOne(ProjectFile, {
+        where: { projectId, path: op.path, deletedAt: IsNull() },
+      });
+      const headContent = headFile?.content ?? null;
+      files.push({
+        path: op.path,
+        base: baseContent,
+        head: headContent,
+        proposed: null,
+        merge_suggestion: null,
+        conflict: headContent !== baseContent,
+      });
+      continue;
+    }
+    if (op.op === 'rename') {
+      const baseContent = await resolveBaseContentForOp(manager, projectId, op);
+      const headFile = await manager.findOne(ProjectFile, {
+        where: { projectId, path: op.path, deletedAt: IsNull() },
+      });
+      const headContent = headFile?.content ?? null;
+      const proposedContent = op.content ?? baseContent;
+      const conflict = headContent !== baseContent;
+      files.push({
+        path: op.path,
+        base: baseContent,
+        head: headContent,
+        proposed: proposedContent,
+        merge_suggestion: conflict ? headContent : proposedContent,
+        conflict,
+      });
+      continue;
+    }
+    // upsert
+    const baseContent = await resolveBaseContentForOp(manager, projectId, op);
+    const headFile = await manager.findOne(ProjectFile, {
+      where: { projectId, path: op.path, deletedAt: IsNull() },
+    });
+    const headContent = headFile?.content ?? null;
+    const proposedContent = op.content ?? '';
+    const headUnchanged = headContent === baseContent;
+    const proposedUnchanged = proposedContent === baseContent;
+    let mergeSuggestion: string;
+    let conflict = false;
+    if (headUnchanged) {
+      mergeSuggestion = proposedContent;
+    } else if (proposedUnchanged) {
+      mergeSuggestion = headContent ?? '';
+    } else {
+      const { merged, hasConflict } = simpleLineMerge(baseContent ?? '', headContent ?? '', proposedContent);
+      mergeSuggestion = merged;
+      conflict = hasConflict;
+    }
+    files.push({
+      path: op.path,
+      base: baseContent,
+      head: headContent,
+      proposed: proposedContent,
+      merge_suggestion: mergeSuggestion,
+      conflict,
+    });
+  }
+
+  return {
+    changeset: { ...serializeChangeset(changeset), base_commit_id: currentCommitId },
+    files,
+  };
+}
+
+async function resolveBaseContentForOp(
+  manager: EntityManager,
+  projectId: string,
+  op: ProjectChangesetFileOp,
+): Promise<string | null> {
+  if (op.base_revision_id) {
+    const revision = await manager.findOne(ProjectFileRevision, {
+      where: { id: op.base_revision_id, projectId, path: op.path },
+    });
+    if (revision) return revision.content;
+  }
+  const file = await manager.findOne(ProjectFile, {
+    where: { projectId, path: op.path, deletedAt: IsNull() },
+  });
+  return file?.content ?? null;
+}
+
+function simpleLineMerge(
+  base: string,
+  head: string,
+  proposed: string,
+): { merged: string; hasConflict: boolean } {
+  const baseLines = base === '' ? [] : base.split('\n');
+  const headLines = head === '' ? [] : head.split('\n');
+  const proposedLines = proposed === '' ? [] : proposed.split('\n');
+
+  const maxLen = Math.max(baseLines.length, headLines.length, proposedLines.length);
+  const result: string[] = [];
+  let hasConflict = false;
+
+  for (let i = 0; i < maxLen; i++) {
+    const b = i < baseLines.length ? baseLines[i] : undefined;
+    const h = i < headLines.length ? headLines[i] : undefined;
+    const p = i < proposedLines.length ? proposedLines[i] : undefined;
+
+    const headChanged = h !== b;
+    const proposedChanged = p !== b;
+
+    if (!headChanged && !proposedChanged) {
+      if (b !== undefined) result.push(b);
+    } else if (!headChanged && proposedChanged) {
+      if (p !== undefined) result.push(p);
+    } else if (headChanged && !proposedChanged) {
+      if (h !== undefined) result.push(h);
+    } else if (h === p) {
+      if (h !== undefined) result.push(h);
+    } else {
+      hasConflict = true;
+      result.push(`<<<<<<< HEAD`);
+      if (h !== undefined) result.push(h);
+      result.push(`=======`);
+      if (p !== undefined) result.push(p);
+      result.push(`>>>>>>> proposed`);
+    }
+  }
+
+  return { merged: result.join('\n'), hasConflict };
+}
+
+type ResolutionItem = { path: string; content: string };
+
+async function applyResolutions(
+  manager: EntityManager,
+  projectId: string,
+  changeset: ProjectChangeset,
+  resolutions: unknown[],
+  actor: Actor,
+): Promise<ReturnType<typeof serializeChangeset>> {
+  const branch = await manager.findOneByOrFail(ProjectBranch, { id: changeset.branchId, projectId });
+  const currentHeadCommitId = branch.headCommitId ?? null;
+  const newFileOps: ProjectChangesetFileOp[] = [];
+
+  const resolutionMap = new Map<string, string>();
+  for (const item of resolutions) {
+    if (
+      item && typeof item === 'object' &&
+      typeof (item as any).path === 'string' &&
+      typeof (item as any).content === 'string'
+    ) {
+      resolutionMap.set((item as any).path, (item as any).content);
+    }
+  }
+
+  for (const op of changeset.fileOps) {
+    const resolved = resolutionMap.get(op.path);
+    if (resolved !== undefined) {
+      const currentFile = await manager.findOne(ProjectFile, {
+        where: { projectId, path: op.path, deletedAt: IsNull() },
+      });
+      newFileOps.push({
+        op: 'upsert',
+        path: op.path,
+        content: resolved,
+        content_type: op.content_type ?? 'text/markdown',
+        base_revision_id: currentFile?.currentRevisionId ?? null,
+      });
+    } else {
+      const currentFile = await manager.findOne(ProjectFile, {
+        where: { projectId, path: op.path, deletedAt: IsNull() },
+      });
+      newFileOps.push({
+        ...op,
+        base_revision_id: currentFile?.currentRevisionId ?? op.base_revision_id ?? null,
+      });
+    }
+  }
+
+  changeset.fileOps = newFileOps;
+  changeset.baseCommitId = currentHeadCommitId;
+  changeset.status = ProjectChangesetStatus.SUBMITTED;
+  changeset.conflicts = null;
+  changeset.mergeStatus = ProjectChangesetMergeStatus.CLEAN;
+  const saved = await manager.save(ProjectChangeset, changeset);
+  return serializeChangeset(saved);
 }
 
 export default router;

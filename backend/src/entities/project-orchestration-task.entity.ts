@@ -102,6 +102,9 @@ export class ProjectOrchestrationTask {
   @Column({ name: 'max_retries', type: 'integer', default: 2 })
   maxRetries!: number;
 
+  @Column({ name: 'timeout_seconds', type: 'integer', default: 1800 })
+  timeoutSeconds!: number;
+
   @Column({ name: 'progress_note', type: 'text', nullable: true })
   progressNote?: string | null;
 
