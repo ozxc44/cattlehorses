@@ -45,6 +45,17 @@ function getConfig(route: string): RateLimitConfig {
   return { tokensPerInterval: 1, intervalMs: 60_000, burst: 1 };
 }
 
+/**
+ * Rate limiting is skipped under NODE_ENV=test so the token-bucket logic never
+ * interferes with the rest of the suite (e.g. changeset creation getting 429s).
+ * The dedicated rate-limit test still needs to exercise limiting, so it sets
+ * RATE_LIMIT_FORCE=1 to opt back in while keeping NODE_ENV=test (and therefore
+ * an isolated SQLite in-memory DB — no shared Postgres, no connection conflicts).
+ */
+function rateLimitEnabled(): boolean {
+  return process.env.NODE_ENV !== 'test' || process.env.RATE_LIMIT_FORCE === '1';
+}
+
 function extractAgentId(req: Request): string {
   if (req.agent?.id) return req.agent.id;
   if (req.user?.userId) return req.user.userId;
@@ -75,7 +86,7 @@ function consumeToken(key: string, config: RateLimitConfig): { allowed: boolean;
 }
 
 export function rateLimitHeartbeat(req: Request, res: Response, next: NextFunction): void {
-  if (process.env.NODE_ENV === 'test') { next(); return; }
+  if (!rateLimitEnabled()) { next(); return; }
   const agentId = extractAgentId(req);
   const key = `${agentId}:heartbeat`;
   const config = getConfig('heartbeat');
@@ -91,7 +102,7 @@ export function rateLimitHeartbeat(req: Request, res: Response, next: NextFuncti
 }
 
 export function rateLimitChangesets(req: Request, res: Response, next: NextFunction): void {
-  if (process.env.NODE_ENV === 'test') { next(); return; }
+  if (!rateLimitEnabled()) { next(); return; }
   const agentId = extractAgentId(req);
   const key = `${agentId}:changesets`;
   const config = getConfig('changesets');
@@ -107,7 +118,7 @@ export function rateLimitChangesets(req: Request, res: Response, next: NextFunct
 }
 
 export function rateLimitTasks(req: Request, res: Response, next: NextFunction): void {
-  if (process.env.NODE_ENV === 'test') { next(); return; }
+  if (!rateLimitEnabled()) { next(); return; }
   const agentId = extractAgentId(req);
   const key = `${agentId}:tasks`;
   const config = getConfig('tasks');

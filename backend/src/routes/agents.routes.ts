@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authenticate, extractProjectId, authenticateAgentApiKey, authenticateJwtOrAgentApiKey } from '../middleware/auth';
 import { requirePermission, requireAgentOwnerOrPermission, Permission } from '../middleware/rbac';
+import { rateLimitHeartbeat } from '../middleware/rate-limit.middleware';
 import { AppDataSource } from '../data-source';
 import { Agent, AgentStatus, AgentLifecycleStatus, AgentSmokeHealth } from '../entities/agent.entity';
 import { ProjectMember, ProjectRole } from '../entities/project-member.entity';
@@ -1030,6 +1031,7 @@ router.get(
 router.post(
   '/v1/agents/heartbeat',
   authenticateAgentApiKey,
+  rateLimitHeartbeat,
   async (req: Request, res: Response) => {
     try {
       const agentId = req.agent!.id;

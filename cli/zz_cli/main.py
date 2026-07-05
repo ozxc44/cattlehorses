@@ -2247,6 +2247,197 @@ def doctor(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  HEALTH-CHECK
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _health_check_fetch(
+    base_url: str, api_key: str, project_id: str
+) -> dict[str, Any]:
+    """Fetch loop-status, metrics, and worker-load in one call using the dashboard endpoint."""
+    status, data = _doctor_http_json(
+        "GET", base_url, f"/v1/projects/{project_id}/dashboard", api_key=api_key
+    )
+    if status != 200:
+        raise RuntimeError(f"Dashboard returned HTTP {status}: {data}")
+    return data
+
+
+def _health_check_render(
+    dashboard: dict[str, Any],
+) -> bool:
+    """Render the health-check summary tables. Returns True if all workers healthy."""
+    loop = dashboard.get("loop_status", {})
+    metrics = dashboard.get("metrics", {})
+    worker_load = dashboard.get("worker_load", {})
+    workers = worker_load.get("data", [])
+
+    # ── Workers table ──────────────────────────────────────────────────────
+    w_table = Table(title="Workers", title_style="bold")
+    w_table.add_column("Name", style="bold")
+    w_table.add_column("Online", width=6)
+    w_table.add_column("Health", width=8)
+    w_table.add_column("Tasks", width=5, justify="right")
+
+    all_healthy = True
+    for w in workers:
+        name = w.get("agent_name", "—")
+        online = w.get("online", False)
+        health = w.get("health_status", "unknown")
+        running = w.get("running_tasks", 0)
+
+        online_str = "[green]yes[/green]" if online else "[red]no[/red]"
+        health_color = {
+            "healthy": "green",
+            "degraded": "yellow",
+            "unhealthy": "red",
+            "offline": "dim",
+        }.get(health, "white")
+        health_str = f"[{health_color}]{health}[/{health_color}]"
+
+        if not online or health in ("unhealthy", "offline"):
+            all_healthy = False
+
+        w_table.add_row(name, online_str, health_str, str(running))
+
+    if workers:
+        console.print(w_table)
+    else:
+        console.print("[dim]No workers found.[/dim]")
+    console.print()
+
+    # ── Orchestrations table ───────────────────────────────────────────────
+    orch = loop.get("orchestrations", {})
+    o_table = Table(title="Orchestrations", title_style="bold")
+    o_table.add_column("Status", style="bold")
+    o_table.add_column("Count", justify="right")
+    o_table.add_row("[green]running[/green]", str(orch.get("running", 0)))
+    o_table.add_row("[yellow]blocked[/yellow]", str(orch.get("blocked", 0)))
+    o_table.add_row("[dim]completed[/dim]", str(orch.get("completed", 0)))
+    console.print(o_table)
+    console.print()
+
+    # ── Changesets table ──────────────────────────────────────────────────
+    pending_cs = len(loop.get("pending_changesets", []))
+    merged_cs = metrics.get("auto_merged_changesets", 0)
+    rejected_cs = metrics.get("rejected_changesets", 0)
+
+    c_table = Table(title="Changesets", title_style="bold")
+    c_table.add_column("Status", style="bold")
+    c_table.add_column("Count", justify="right")
+    c_table.add_row("[yellow]pending[/yellow]", str(pending_cs))
+    c_table.add_row("[green]merged[/green]", str(merged_cs))
+    c_table.add_row("[red]rejected[/red]", str(rejected_cs))
+    console.print(c_table)
+    console.print()
+
+    # ── Running tasks ─────────────────────────────────────────────────────
+    running_tasks = loop.get("running_tasks", 0)
+    stalled = loop.get("stalled_tasks", [])
+    console.print(f"[bold]Running tasks:[/bold] {running_tasks}")
+    if stalled:
+        console.print(f"[yellow]Stalled tasks:[/yellow] {len(stalled)}")
+        for t in stalled[:5]:
+            console.print(f"  - {t.get('title', t.get('id', '—'))} (age: {t.get('age_minutes', '?')}m)")
+
+    return all_healthy
+
+
+def _health_check_json(dashboard: dict[str, Any]) -> bool:
+    """Print JSON summary. Returns True if all workers healthy."""
+    loop = dashboard.get("loop_status", {})
+    metrics = dashboard.get("metrics", {})
+    worker_load = dashboard.get("worker_load", {})
+    workers = worker_load.get("data", [])
+
+    all_healthy = all(
+        w.get("online", False) and w.get("health_status") not in ("unhealthy", "offline")
+        for w in workers
+    ) if workers else True
+
+    summary = {
+        "healthy": all_healthy,
+        "workers": [
+            {
+                "name": w.get("agent_name"),
+                "online": w.get("online"),
+                "health": w.get("health_status"),
+                "running_tasks": w.get("running_tasks", 0),
+            }
+            for w in workers
+        ],
+        "orchestrations": loop.get("orchestrations", {}),
+        "changesets": {
+            "pending": len(loop.get("pending_changesets", [])),
+            "merged": metrics.get("auto_merged_changesets", 0),
+            "rejected": metrics.get("rejected_changesets", 0),
+        },
+        "running_tasks": loop.get("running_tasks", 0),
+        "stalled_tasks": len(loop.get("stalled_tasks", [])),
+    }
+    console.print_json(json.dumps(summary, default=str))
+    return all_healthy
+
+
+@app.command("health-check")
+def health_check(
+    project_id: Optional[str] = typer.Option(
+        None, "--project", "-p", help="Project ID"
+    ),
+    output_json: bool = typer.Option(
+        False, "--json", help="Machine-readable JSON output"
+    ),
+    watch: bool = typer.Option(
+        False, "--watch", "-w", help="Continuous monitoring (refresh every 10s)"
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="Platform base URL"
+    ),
+) -> None:
+    """Check platform health: workers, orchestrations, changesets.
+
+    Exits 0 if all workers healthy, 1 if any worker unhealthy.
+    """
+    resolved_base_url = (base_url or _get_base_url()).rstrip("/")
+    agent_key = _doctor_agent_key()
+    if not agent_key:
+        console.print("[red]No agent credential found. Login or configure an agent key first.[/red]")
+        raise typer.Exit(1)
+
+    resolved_project_id = project_id or _doctor_project_id(None, [])
+    if not resolved_project_id:
+        console.print("[red]No project specified. Use --project <id> or set a default.[/red]")
+        raise typer.Exit(1)
+
+    def _run_once() -> bool:
+        try:
+            dashboard = _health_check_fetch(resolved_base_url, agent_key, resolved_project_id)
+        except Exception as e:
+            console.print(f"[red]Failed to fetch health data:[/red] {e}")
+            return False
+        if output_json:
+            return _health_check_json(dashboard)
+        return _health_check_render(dashboard)
+
+    if watch:
+        console.print("[bold]zz health-check[/bold] — watching (Ctrl+C to stop)\n")
+        try:
+            while True:
+                console.clear()
+                console.print(f"[bold]zz health-check[/bold] — {_get_base_url()} — project {resolved_project_id[:12]}...")
+                console.print(f"[dim]{time.strftime('%Y-%m-%d %H:%M:%S')}[/dim]\n")
+                healthy = _run_once()
+                console.print(f"\n[dim]Next refresh in 10s...[/dim]")
+                time.sleep(10)
+        except KeyboardInterrupt:
+            console.print("\n[dim]Stopped.[/dim]")
+            raise typer.Exit(0)
+    else:
+        healthy = _run_once()
+        raise typer.Exit(0 if healthy else 1)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  AGENT RUNTIME
 # ═══════════════════════════════════════════════════════════════════════════════
 
