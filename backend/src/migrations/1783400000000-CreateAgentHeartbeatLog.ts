@@ -11,6 +11,7 @@ export class CreateAgentHeartbeatLog1783400000000 implements MigrationInterface 
         "status" varchar(32),
         "health_status" varchar(32),
         "response_time_ms" integer,
+        "online" boolean,
         "created_at" timestamp NOT NULL DEFAULT now(),
         CONSTRAINT "FK_agent_heartbeat_log_agent_id" FOREIGN KEY ("agent_id") REFERENCES "agents"("id") ON DELETE CASCADE
       )
