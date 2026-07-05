@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 
-process.env.NODE_ENV = 'test';
+process.env.NODE_ENV = 'rate-limit-test';
 process.env.JWT_SECRET = 'rate-limit-test-secret';
 process.env.AGENT_ONLINE_TTL_MS = '90000';
 process.env.RATE_LIMIT_HEARTBEAT_PER_S = '0.1';
