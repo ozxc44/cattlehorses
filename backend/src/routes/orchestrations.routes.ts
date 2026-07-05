@@ -753,54 +753,6 @@ router.post(
   },
 );
 
-/**
- * POST /v1/projects/:project_id/orchestrations/:orchestration_id/dispatch-ready
- *
- * DAG auto-walk: in a single call, find every task in the orchestration that is
- * ready to run (status pending/dispatched AND every depends_on approved) and
- * dispatch it to a distinct healthy worker — one task per available worker, in
- * parallel. Higher-priority then older tasks claim workers first. Tasks that
- * cannot be dispatched (unmet dependencies, or no free eligible worker) come
- * back in `skipped` with a reason. This is the PM's "fire all ready tasks"
- * lever: call once after planning, and again whenever a dependency resolves, and
- * every newly-unblocked task flies out.
- *
- * Worker eligibility mirrors smart-dispatch: ACTIVE project agents with a fresh
- * heartbeat that are not smoke-unhealthy, further filtered by a task's
- * required_capability when set.
- *
- * Auth: project-level / orchestration main agent or any user (SendMessage).
- * 200 → { dispatched: [{task_id, agent_name}], skipped: [{task_id, reason}] }
- */
-router.post(
-  '/v1/projects/:project_id/orchestrations/:orchestration_id/dispatch-ready',
-  authenticateJwtOrAgentApiKey,
-  extractProjectId,
-  requirePermission(Permission.SendMessage),
-  async (req: Request, res: Response) => {
-    try {
-      const projectId = req.params.project_id;
-      const actor = getActor(req);
-      if (!actor) {
-        res.status(401).json({ detail: 'Authentication required' });
-        return;
-      }
-      const orchestration = await loadOrchestration(projectId, req.params.orchestration_id);
-      if (!orchestration) {
-        res.status(404).json({ detail: 'Orchestration not found' });
-        return;
-      }
-      if (!await ensureMainAgentOrUser(req, res, orchestration)) return;
-
-      const result = await dispatchReadyTasks({ projectId, orchestration, actor });
-      res.json(result);
-    } catch (err) {
-      console.error('Dispatch-ready error:', err);
-      res.status(500).json({ detail: 'Internal server error' });
-    }
-  },
-);
-
 router.get(
   '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks',
   authenticateJwtOrAgentApiKey,
@@ -1864,6 +1816,115 @@ router.patch(
 );
 
 /**
+ * POST /v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/cancel
+ * Main agent (PM) cancels an in-flight task. Records who/when/why on
+ * metadata.cancellation (surfaced via serializeTask as `cancelled_at` +
+ * `cancellation`), notifies the assigned worker via a durable task_cancelled
+ * inbox item, and acks any stale task_dispatched notification so the worker
+ * can't later claim a dead task (ghost-notification guard). Terminal-status
+ * tasks (approved/cancelled/failed) are refused with 409.
+ * Body: { reason?: "..." }
+ * RBAC: project-level main agent OR orchestration main agent (ensureMainAgentOrUser).
+ */
+router.post(
+  '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/cancel',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.SendMessage),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = getActor(req);
+      if (!actor) {
+        res.status(401).json({ detail: 'Authentication required' });
+        return;
+      }
+      const task = await loadTask(req.params.project_id, req.params.orchestration_id, req.params.task_id);
+      if (!task) {
+        res.status(404).json({ detail: 'Task not found' });
+        return;
+      }
+      if (!await ensureMainAgentOrUser(req, res, task.orchestration)) return;
+
+      // Terminal tasks cannot be cancelled — the work is already settled.
+      if (TERMINAL_TASK_STATUSES.includes(task.status)) {
+        res.status(409).json({
+          detail: `Task is in a terminal status (${task.status}) and cannot be cancelled`,
+        });
+        return;
+      }
+
+      const reason = typeof req.body.reason === 'string' ? req.body.reason.trim().slice(0, 20_000) : '';
+      const cancelledAt = new Date();
+      const previousStatus = task.status;
+
+      task.status = ProjectOrchestrationTaskStatus.CANCELLED;
+      const metadata = (task.metadata && typeof task.metadata === 'object')
+        ? { ...(task.metadata as Record<string, unknown>) }
+        : {};
+      metadata.cancellation = {
+        cancelled_at: cancelledAt.toISOString(),
+        cancelled_by: actor.actorId,
+        cancelled_by_type: actor.agentId ? 'agent' : 'user',
+        reason,
+      };
+      task.metadata = metadata;
+
+      const updated = await AppDataSource.transaction(async (manager) => {
+        await manager.save(ProjectOrchestrationTask, task);
+        await refreshTaskLedger(manager, task.orchestration, actor.actorId);
+        return task;
+      });
+
+      // Notify the assigned worker that the task is dead, and clear the original
+      // task_dispatched notification so it can't be claimed after the fact.
+      if (updated.assignedAgentId) {
+        await ackInboxItemsForTask(updated.assignedAgentId, updated.id).catch((e: any) =>
+          console.error('Failed to ack worker inbox on cancel:', e));
+        await createInboxItem({
+          projectId: updated.projectId,
+          recipientAgentId: updated.assignedAgentId,
+          eventType: 'task_cancelled',
+          title: `Task cancelled: ${updated.title}`,
+          body: `Task ID: ${updated.id}${reason ? ` (reason: ${reason})` : ''}. No further action needed from you on this task.`,
+          orchestrationId: updated.orchestrationId,
+          taskId: updated.id,
+        }).catch((e: any) => console.error('Failed to notify worker of cancellation:', e));
+      }
+
+      publishTaskStatusChanged(
+        updated.orchestration.sessionId,
+        updated.projectId,
+        updated,
+        previousStatus,
+      );
+
+      try {
+        if (updated.orchestration.sessionId) {
+          eventStreamService.publish(updated.orchestration.sessionId, {
+            projectId: updated.projectId,
+            sessionId: updated.orchestration.sessionId,
+            agentId: req.agent?.id ?? undefined,
+            type: 'task_cancelled',
+            payload: {
+              taskId: updated.id,
+              agentId: req.agent?.id ?? undefined,
+              status: updated.status,
+            },
+          });
+        }
+      } catch (streamErr) {
+        console.warn('Failed to publish task_cancelled event:', streamErr);
+      }
+
+      res.status(200).json(serializeTask(updated));
+    } catch (err) {
+      console.error('Cancel orchestration task error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
+/**
  * POST /v1/projects/:project_id/orchestrations/:orchestration_id/tasks/:task_id/reassign
  * Main agent redirects a stalled task to a different worker. Cancels the old
  * task and creates a fresh one (same goal/acceptance criteria) assigned to the
@@ -2246,181 +2307,6 @@ async function dispatchTaskToAssignedAgent(input: {
       ? { retry_count: task.retryCount ?? 0, max_retries: task.maxRetries ?? 2 }
       : null,
   });
-}
-
-/**
- * Auto-dispatch every ready task in an orchestration — the engine behind
- * POST /dispatch-ready. A task is "ready" when its status is pending/dispatched
- * and every depends_on is approved. Ready tasks are launched in priority-then-age
- * order, each to a distinct healthy worker (one task per worker per call); the
- * rest are returned with a skip reason.
- *
- * Worker eligibility mirrors smart-dispatch: ACTIVE project agents with a fresh
- * heartbeat that are not smoke-unhealthy, further filtered by a task's
- * required_capability when set. The least-loaded worker wins each assignment;
- * once a worker is handed a task this round it is removed from the pool, which is
- * what gives the "one task per available healthy worker" parallel semantics.
- */
-async function dispatchReadyTasks(input: {
-  projectId: string;
-  orchestration: ProjectOrchestration;
-  actor: { userId: string | null; agentId: string | null; actorId: string };
-}): Promise<{
-  dispatched: Array<{ task_id: string; agent_name: string }>;
-  skipped: Array<{ task_id: string; reason: string }>;
-}> {
-  const { projectId, orchestration, actor } = input;
-  const taskRepo = AppDataSource.getRepository(ProjectOrchestrationTask);
-
-  // Candidate tasks: pending or dispatched. priority DESC then createdAt ASC so
-  // the most urgent / oldest work claims workers first.
-  const candidates = await taskRepo.find({
-    where: { projectId, orchestrationId: orchestration.id },
-    order: { priority: 'DESC', createdAt: 'ASC' },
-  });
-  const readyStatuses: ProjectOrchestrationTaskStatus[] = [
-    ProjectOrchestrationTaskStatus.PENDING,
-    ProjectOrchestrationTaskStatus.DISPATCHED,
-  ];
-
-  // Healthy worker pool: ACTIVE, online (fresh heartbeat), not smoke-unhealthy.
-  const agents = await AppDataSource.getRepository(Agent).find({
-    where: { projectId, lifecycleStatus: AgentLifecycleStatus.ACTIVE },
-  });
-  const activeTasks = await taskRepo.find({
-    where: { projectId, status: In(TASK_DEDUP_ACTIVE_STATUSES) },
-  });
-  const loadByAgent = new Map<string, number>();
-  for (const t of activeTasks) {
-    if (!t.assignedAgentId) continue;
-    loadByAgent.set(t.assignedAgentId, (loadByAgent.get(t.assignedAgentId) ?? 0) + 1);
-  }
-  const pool = agents
-    .filter((agent) => {
-      const presence = getAgentPresence(agent);
-      if (!presence.isOnline) return false;
-      if (agent.healthStatus === AgentSmokeHealth.UNHEALTHY) return false;
-      return true;
-    })
-    .map((agent) => ({ agent, load: loadByAgent.get(agent.id) ?? 0 }))
-    .sort((a, b) => (a.load !== b.load ? a.load - b.load : a.agent.name.localeCompare(b.agent.name)));
-
-  const consumed = new Set<string>();
-  const dispatched: Array<{ task_id: string; agent_name: string }> = [];
-  const skipped: Array<{ task_id: string; reason: string }> = [];
-
-  for (const task of candidates) {
-    if (!readyStatuses.includes(task.status)) continue;
-
-    // (1) dependency gate — every depends_on must be approved.
-    const dependencyCheck = await checkDependenciesMet(task);
-    if (!dependencyCheck.met) {
-      skipped.push({ task_id: task.id, reason: 'dependencies_not_met' });
-      continue;
-    }
-
-    // (2) eligible workers: not yet consumed this round + capability match.
-    const requiredCapability = normalizeCapability(task.requiredCapability);
-    const eligible = pool.filter(({ agent }) => {
-      if (consumed.has(agent.id)) return false;
-      if (requiredCapability && !normalizeCapabilities(agent.capabilities).includes(requiredCapability)) {
-        return false;
-      }
-      return true;
-    });
-
-    // Prefer the task's existing assignee when it is still available, so a
-    // previously-dispatched task keeps its worker instead of bouncing to a
-    // new one. Otherwise take the least-loaded eligible worker.
-    let chosen = task.assignedAgentId
-      ? eligible.find(({ agent }) => agent.id === task.assignedAgentId) ?? null
-      : null;
-    if (!chosen) {
-      chosen = eligible[0] ?? null;
-    }
-
-    if (!chosen) {
-      skipped.push({ task_id: task.id, reason: 'no_available_worker' });
-      continue;
-    }
-
-    consumed.add(chosen.agent.id);
-    const updated = await dispatchExistingTask({
-      projectId,
-      orchestration,
-      task,
-      agentId: chosen.agent.id,
-      actorId: actor.actorId,
-    });
-    dispatched.push({ task_id: updated.id, agent_name: chosen.agent.name });
-  }
-
-  if (dispatched.length > 0) {
-    try {
-      await AppDataSource.transaction(async (manager) => {
-        await refreshTaskLedger(manager, orchestration, actor.actorId);
-      });
-    } catch (ledgerErr) {
-      console.warn('dispatch-ready: failed to refresh task ledger:', ledgerErr);
-    }
-  }
-
-  return { dispatched, skipped };
-}
-
-/**
- * Launch (or re-launch) an existing orchestration task to a specific worker.
- * Flips the row to dispatched (preserving any prior dispatchedAt), promotes a
- * PLANNING orchestration to RUNNING, then notifies the worker through the same
- * session + durable-inbox channel the create-and-dispatch path uses. Best-effort
- * side-effects never throw back to the caller — a dispatch that lands in the DB
- * counts as dispatched even if a notification fails.
- */
-async function dispatchExistingTask(input: {
-  projectId: string;
-  orchestration: ProjectOrchestration;
-  task: ProjectOrchestrationTask;
-  agentId: string;
-  actorId: string;
-}): Promise<ProjectOrchestrationTask> {
-  const { projectId, orchestration, task, agentId, actorId } = input;
-  const previousStatus = task.status;
-
-  task.assignedAgentId = agentId;
-  task.status = ProjectOrchestrationTaskStatus.DISPATCHED;
-  task.dispatchedAt = task.dispatchedAt ?? new Date();
-  task.progressNote = null;
-  task.progressPercent = null;
-  task.progressAt = null;
-  const saved = await AppDataSource.getRepository(ProjectOrchestrationTask).save(task);
-
-  if (orchestration.status === ProjectOrchestrationStatus.PLANNING) {
-    orchestration.status = ProjectOrchestrationStatus.RUNNING;
-    await AppDataSource.getRepository(ProjectOrchestration).save(orchestration);
-  }
-
-  await dispatchTaskToAssignedAgent({ projectId, orchestration, task: saved, actorId, retry: false });
-
-  publishTaskStatusChanged(orchestration.sessionId, projectId, saved, previousStatus);
-  try {
-    if (orchestration.sessionId) {
-      eventStreamService.publish(orchestration.sessionId, {
-        projectId,
-        sessionId: orchestration.sessionId,
-        agentId: saved.assignedAgentId ?? undefined,
-        type: 'task_dispatched',
-        payload: {
-          taskId: saved.id,
-          agentId: saved.assignedAgentId ?? undefined,
-          status: saved.status,
-        },
-      });
-    }
-  } catch (streamErr) {
-    console.warn('Failed to publish task_dispatched event:', streamErr);
-  }
-
-  return saved;
 }
 
 /**
@@ -3114,10 +3000,33 @@ function serializeOrchestration(orchestration: ProjectOrchestration, tasks?: Pro
   };
 }
 
+function readTaskCancellation(task: ProjectOrchestrationTask): {
+  cancelled_at: string;
+  cancelled_by: string;
+  reason: string;
+} | null {
+  const cancellation = task.metadata
+    ? (task.metadata as Record<string, unknown>).cancellation as
+        | { cancelled_at?: string; cancelled_by?: string; reason?: string }
+        | undefined
+    : undefined;
+  if (!cancellation || typeof cancellation.cancelled_at !== 'string') return null;
+  return {
+    cancelled_at: cancellation.cancelled_at,
+    cancelled_by: typeof cancellation.cancelled_by === 'string' ? cancellation.cancelled_by : '',
+    reason: typeof cancellation.reason === 'string' ? cancellation.reason : '',
+  };
+}
+
 function serializeTask(task: ProjectOrchestrationTask) {
   const artifacts = task.metadata
     ? (task.metadata as Record<string, unknown>).md_artifacts as Record<string, string> | undefined
     : undefined;
+  // Cancellation is persisted on metadata.cancellation (set by the cancel
+  // endpoint) rather than a dedicated column; surface its timestamp + structured
+  // payload on the serialized task so callers can tell when/why/by whom a task
+  // was cancelled.
+  const cancellation = readTaskCancellation(task);
   return {
     id: task.id,
     project_id: task.projectId,
@@ -3148,6 +3057,8 @@ function serializeTask(task: ProjectOrchestrationTask) {
     claimed_at: task.claimedAt ?? null,
     completed_at: task.completedAt ?? null,
     reviewed_at: task.reviewedAt ?? null,
+    cancelled_at: cancellation?.cancelled_at ?? null,
+    cancellation,
     created_at: task.createdAt,
     updated_at: task.updatedAt,
     md_artifacts: artifacts ?? null,
@@ -3962,6 +3873,13 @@ const TASK_DEDUP_ACTIVE_STATUSES: ProjectOrchestrationTaskStatus[] = [
   ProjectOrchestrationTaskStatus.DISPATCHED,
   ProjectOrchestrationTaskStatus.RUNNING,
   ProjectOrchestrationTaskStatus.CHANGES_REQUESTED,
+];
+
+/** Terminal task statuses — once reached the task can no longer be cancelled. */
+const TERMINAL_TASK_STATUSES: ProjectOrchestrationTaskStatus[] = [
+  ProjectOrchestrationTaskStatus.APPROVED,
+  ProjectOrchestrationTaskStatus.CANCELLED,
+  ProjectOrchestrationTaskStatus.FAILED,
 ];
 
 /** Normalize free text for dedup: trim, lowercase, collapse whitespace runs. */

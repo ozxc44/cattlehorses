@@ -41,6 +41,7 @@ import {
   AuditLogEntry,
   LoopAlert,
   ScheduledDispatch,
+  AgentHeartbeatLog,
 } from './entities';
 
 const isTestEnv = process.env.NODE_ENV === 'test';
@@ -87,6 +88,7 @@ const entities = [
   AuditLogEntry,
   LoopAlert,
   ScheduledDispatch,
+  AgentHeartbeatLog,
 ];
 
 const migrations = [`${__dirname}/migrations/*{.ts,.js}`];

@@ -4,6 +4,7 @@ import { requirePermission, requireAgentOwnerOrPermission, Permission } from '..
 import { rateLimitHeartbeat } from '../middleware/rate-limit.middleware';
 import { AppDataSource } from '../data-source';
 import { Agent, AgentStatus, AgentLifecycleStatus, AgentSmokeHealth } from '../entities/agent.entity';
+import { AgentHeartbeatLog } from '../entities/agent-heartbeat-log.entity';
 import { ProjectMember, ProjectRole } from '../entities/project-member.entity';
 import { Session, SessionStatus } from '../entities/session.entity';
 import { SessionParticipant } from '../entities/session-participant.entity';
@@ -22,6 +23,7 @@ import * as jwt from 'jsonwebtoken';
 
 const router = Router();
 const agentRepo = AppDataSource.getRepository(Agent);
+const heartbeatLogRepo = AppDataSource.getRepository(AgentHeartbeatLog);
 const sessionRepo = AppDataSource.getRepository(Session);
 const participantRepo = AppDataSource.getRepository(SessionParticipant);
 const messageRepo = AppDataSource.getRepository(Message);
@@ -1219,6 +1221,21 @@ router.post(
 
       await agentRepo.save(agent);
 
+      // R33b: log heartbeat snapshot for history tracking
+      try {
+        const presence = getAgentPresence(agent);
+        const logEntry = heartbeatLogRepo.create({
+          agentId: agent.id,
+          status: presence.healthStatus,
+          healthStatus: agent.healthStatus ?? null,
+          responseTimeMs: typeof req.body?.latency_ms === 'number' ? req.body.latency_ms : null,
+          online: presence.isOnline,
+        });
+        await heartbeatLogRepo.save(logEntry);
+        // Sweep: keep only last 1000 per agent (fire-and-forget)
+        sweepHeartbeatLogs(agent.id).catch(() => {});
+      } catch { /* best-effort logging */ }
+
       // Publish status change event if status changed
       if (status && oldStatus !== agent.status) {
         eventStreamService.publish(agent.id, {
@@ -1575,6 +1592,63 @@ router.post(
       res.json(serializeAgent(agent));
     } catch (err) {
       console.error('Retire agent error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  }
+);
+
+const HEARTBEAT_LOG_LIMIT = 1000;
+
+async function sweepHeartbeatLogs(agentId: string): Promise<void> {
+  const count = await heartbeatLogRepo.count({ where: { agentId } });
+  if (count <= HEARTBEAT_LOG_LIMIT) return;
+  const excess = count - HEARTBEAT_LOG_LIMIT;
+  const stale = await heartbeatLogRepo.find({
+    where: { agentId },
+    order: { createdAt: 'ASC' },
+    take: excess,
+    select: ['id'],
+  });
+  if (stale.length > 0) {
+    await heartbeatLogRepo.delete(stale.map((r) => r.id));
+  }
+}
+
+/**
+ * GET /v1/agents/:aid/heartbeat-history
+ * Returns the last N heartbeat records for an agent.
+ * Query params: limit (default 100, max 1000).
+ * Auth: user JWT.
+ */
+router.get(
+  '/v1/agents/:aid/heartbeat-history',
+  authenticate,
+  attachAgentProject,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const agent = (req as any).loadedAgent as Agent;
+      const limit = Math.min(parseInt(req.query.limit as string, 10) || 100, HEARTBEAT_LOG_LIMIT);
+
+      const records = await heartbeatLogRepo.find({
+        where: { agentId: agent.id },
+        order: { createdAt: 'DESC' },
+        take: limit,
+      });
+
+      res.json({
+        agent_id: agent.id,
+        data: records.map((r) => ({
+          timestamp: r.createdAt,
+          status: r.status,
+          online: r.online,
+          health_status: r.healthStatus ?? null,
+          response_time_ms: r.responseTimeMs ?? null,
+        })),
+        meta: { limit, count: records.length },
+      });
+    } catch (err) {
+      console.error('Heartbeat history error:', err);
       res.status(500).json({ detail: 'Internal server error' });
     }
   }
