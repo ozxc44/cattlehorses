@@ -8,7 +8,7 @@ process.env.AGENT_ONLINE_TTL_MS = '90000';
 let passed = 0;
 let failed = 0;
 
-function check(label: string, actual: unknown, expected: unknown): void {
+function check<T>(label: string, actual: T, expected: T): void {
   if (actual === expected) {
     passed++;
     console.log(`  ✅ ${label}`);
@@ -24,7 +24,6 @@ async function main(): Promise<void> {
   const app = (await import('../src/app')).default;
   await AppDataSource.initialize();
   const server = http.createServer(app);
-
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const address = server.address();
   assert(address && typeof address === 'object');
@@ -50,6 +49,7 @@ async function main(): Promise<void> {
     const worker = await api(baseUrl, 'POST', `/v1/projects/${projectId}/agents`, wUser.token, { name: 'worker' });
     const workerKey = worker.data.api_key;
     const workerId = worker.data.id;
+
     for (const k of [pmKey, workerKey]) {
       await apiWithKey(baseUrl, 'POST', '/v1/agents/heartbeat', k, {});
     }
@@ -61,9 +61,7 @@ async function main(): Promise<void> {
       main_agent_id: pmId, worker_agent_ids: [workerId],
     });
     const orchId = orch.data.id;
-
-    const taskPath = (taskId: string) =>
-      `/v1/projects/${projectId}/orchestrations/${orchId}/tasks/${taskId}`;
+    const taskPath = (taskId: string) => `/v1/projects/${projectId}/orchestrations/${orchId}/tasks/${taskId}`;
 
     // ── Dispatch a cancellable task to the worker ──────────────────────────
     const t = await apiWithKey(baseUrl, 'POST', `/v1/projects/${projectId}/orchestrations/${orchId}/tasks`, pmKey, {
@@ -79,13 +77,9 @@ async function main(): Promise<void> {
     });
     check('cancel returns 200', cancel.status, 200);
     check('cancel sets status to cancelled', cancel.data.status, 'cancelled');
-
     // (1) cancelledAt is set: response exposes a non-null ISO `cancelled_at`.
     check('cancelled_at is set (non-null)', cancel.data.cancelled_at !== null, true);
-    check('cancelled_at is a valid ISO string',
-      typeof cancel.data.cancelled_at === 'string' && !isNaN(new Date(cancel.data.cancelled_at).getTime()),
-      true);
-
+    check('cancelled_at is a valid ISO string', typeof cancel.data.cancelled_at === 'string' && !isNaN(new Date(cancel.data.cancelled_at).getTime()), true);
     // (2) metadata.cancellation is populated with who/when/why. The serializer
     //     exposes the structured `cancellation` field (derived from the stored
     //     metadata.cancellation), and we additionally read the DB row to confirm
@@ -97,9 +91,7 @@ async function main(): Promise<void> {
     check('cancellation.reason recorded', cancellation?.reason, 'obsolete');
 
     const dbRow = await AppDataSource.getRepository(ProjectOrchestrationTask).findOne({ where: { id: taskId } });
-    const dbCancellation = (dbRow?.metadata as Record<string, unknown> | null | undefined)?.cancellation as
-      | Record<string, unknown>
-      | undefined;
+    const dbCancellation = (dbRow?.metadata as Record<string, unknown> | null | undefined)?.cancellation as Record<string, unknown> | undefined;
     check('DB metadata.cancellation populated', dbCancellation !== undefined && dbCancellation !== null, true);
     check('DB metadata.cancellation.cancelled_by is PM', dbCancellation?.cancelled_by, pmId);
     check('DB metadata.cancellation.cancelled_at set', typeof dbCancellation?.cancelled_at === 'string', true);
@@ -113,16 +105,11 @@ async function main(): Promise<void> {
     // ── Edge case (3): worker receives a task_cancelled inbox notification ──
     const workerInbox = await apiWithKey(baseUrl, 'GET', '/v1/agent/inbox?unread=true', workerKey);
     check('worker inbox 200', workerInbox.status, 200);
-    const cancelledNotify = (workerInbox.data.data || []).find(
-      (i: any) => i.task_id === taskId && i.event_type === 'task_cancelled',
-    );
+    const cancelledNotify = (workerInbox.data.data || []).find((i: any) => i.task_id === taskId && i.event_type === 'task_cancelled');
     check('worker got task_cancelled inbox notification', !!cancelledNotify, true);
-
     // The stale task_dispatched notification for this task must be cleared
     // (acked) so the worker cannot claim a dead task (ghost-notification guard).
-    const staleDispatch = (workerInbox.data.data || []).find(
-      (i: any) => i.task_id === taskId && i.event_type === 'task_dispatched' && i.status === 'unread',
-    );
+    const staleDispatch = (workerInbox.data.data || []).find((i: any) => i.task_id === taskId && i.event_type === 'task_dispatched' && i.status === 'unread');
     check('stale task_dispatched notification cleared', !staleDispatch, true);
 
     // ── Edge case (4): terminal-status tasks return 409 ────────────────────
@@ -182,22 +169,30 @@ async function register(baseUrl: string, prefix: string): Promise<{ token: strin
   return { token: response.data.access_token, userId: response.data.user.id };
 }
 
-async function api(baseUrl: string, method: string, path: string, token?: string, body?: unknown) {
+async function api(baseUrl: string, method: string, path: string, token: string | undefined, body?: unknown): Promise<{ status: number; data: any }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${baseUrl}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await response.text();
   let data: any = text;
-  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
   return { status: response.status, data };
 }
 
-async function apiWithKey(baseUrl: string, method: string, path: string, apiKey: string, body?: unknown) {
+async function apiWithKey(baseUrl: string, method: string, path: string, apiKey: string, body?: unknown): Promise<{ status: number; data: any }> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-API-Key': apiKey };
   const response = await fetch(`${baseUrl}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await response.text();
   let data: any = text;
-  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
   return { status: response.status, data };
 }
 

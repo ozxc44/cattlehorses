@@ -591,6 +591,89 @@ router.get(
   },
 );
 
+// ── R31c: task dependency DAG for PM visualization ──────────────────────────
+router.get(
+  '/v1/projects/:project_id/orchestrations/:orchestration_id/dependency-graph',
+  authenticateJwtOrAgentApiKey,
+  extractProjectId,
+  requirePermission(Permission.ViewProject),
+  async (req: Request, res: Response) => {
+    try {
+      const projectId = req.params.project_id;
+      const orchestrationId = req.params.orchestration_id;
+
+      const orchestration = await loadOrchestration(projectId, orchestrationId);
+      if (!orchestration) {
+        res.status(404).json({ detail: 'Orchestration not found' });
+        return;
+      }
+
+      const tasks = await AppDataSource.getRepository(ProjectOrchestrationTask).find({
+        where: { projectId, orchestrationId },
+        relations: ['assignedAgent'],
+        order: { createdAt: 'ASC' },
+      });
+
+      if (!canViewOrchestration(req, orchestration, tasks)) {
+        res.status(403).json({ detail: 'Agent is not part of this orchestration' });
+        return;
+      }
+
+      const taskById = new Map(tasks.map((task) => [task.id, task]));
+      const approvedStatus = ProjectOrchestrationTaskStatus.APPROVED;
+
+      const nodes = tasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        assigned_agent: task.assignedAgentId ?? null,
+        depends_on: task.dependsOn ?? [],
+      }));
+
+      const edges: Array<{ from: string; to: string }> = [];
+      for (const task of tasks) {
+        for (const dependencyId of task.dependsOn ?? []) {
+          if (taskById.has(dependencyId)) {
+            edges.push({ from: dependencyId, to: task.id });
+          }
+        }
+      }
+
+      let blockedCount = 0;
+      let readyCount = 0;
+      let completedCount = 0;
+
+      for (const task of tasks) {
+        if (task.status === approvedStatus) {
+          completedCount += 1;
+          continue;
+        }
+        const dependencyIds = task.dependsOn ?? [];
+        const blocked = dependencyIds.some((dependencyId) => {
+          const dependency = taskById.get(dependencyId);
+          return !dependency || dependency.status !== approvedStatus;
+        });
+        if (blocked) {
+          blockedCount += 1;
+        } else {
+          readyCount += 1;
+        }
+      }
+
+      res.json({
+        nodes,
+        edges,
+        blocked_count: blockedCount,
+        ready_count: readyCount,
+        completed_count: completedCount,
+      });
+    } catch (err) {
+      console.error('Get dependency graph error:', err);
+      res.status(500).json({ detail: 'Internal server error' });
+    }
+  },
+);
+
 router.post(
   '/v1/projects/:project_id/orchestrations/:orchestration_id/tasks',
   authenticateJwtOrAgentApiKey,
